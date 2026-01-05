@@ -44,6 +44,37 @@ class CocoDetectionDataset(Dataset):
         self.transforms = transforms
         self.return_masks = return_masks
         
+        # 检查 transforms 兼容性（仅警告一次，避免日志爆炸）
+        if self.transforms is not None:
+            import warnings
+            # 检测不兼容的 transform 类型
+            incompatible = []
+            if hasattr(transforms, 'transforms'):  # Compose
+                for t in transforms.transforms:
+                    t_name = type(t).__name__
+                    if t_name in ['ToTensor', 'RandomHorizontalFlip', 'RandomVerticalFlip', 
+                                  'RandomCrop', 'CenterCrop', 'RandomResizedCrop', 'RandomRotation']:
+                        incompatible.append(t_name)
+            elif type(transforms).__name__ in ['ToTensor', 'RandomHorizontalFlip', 'RandomCrop']:
+                incompatible.append(type(transforms).__name__)
+            
+            if incompatible:
+                warnings.warn(
+                    f"⚠️  检测到不兼容的 transforms: {incompatible}。\n"
+                    "  - ToTensor 会打断 DetrImageProcessor（期望 PIL/ndarray）\n"
+                    "  - 几何变换（翻转/裁剪）的 bbox 不会同步，会导致训练失真。\n"
+                    "  建议：仅使用 ColorJitter/GaussianBlur 等颜色增强，或改用 albumentations。",
+                    UserWarning,
+                    stacklevel=2
+                )
+            else:
+                warnings.warn(
+                    "当前 transforms 仅作用于图像，bbox 不会同步变换。\n"
+                    "请确保仅包含颜色增强（ColorJitter/GaussianBlur），避免几何变换。",
+                    UserWarning,
+                    stacklevel=2
+                )
+        
     def __len__(self) -> int:
         return len(self.ids)
     
@@ -88,17 +119,8 @@ class CocoDetectionDataset(Dataset):
         }
         
         # 应用数据增强（如果提供）
-        # ⚠️  警告：当前实现仅对图像应用增强，bbox 不会同步变换
-        # 如需几何变换（翻转/裁剪/旋转），请使用支持 bbox 变换的库如 albumentations
-        # 或确保 transforms 仅包含颜色增强（ColorJitter 等）
+        # 注意：已在 __init__ 中检查兼容性，此处直接应用
         if self.transforms is not None:
-            import warnings
-            warnings.warn(
-                "当前数据增强仅作用于图像，bbox 不会同步变换。"
-                "几何变换（翻转/裁剪）会导致标注错位。"
-                "建议使用 albumentations 或仅使用颜色增强。",
-                UserWarning
-            )
             image = self.transforms(image)
         
         return image, target

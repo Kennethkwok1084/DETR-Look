@@ -70,7 +70,8 @@ class MetricsLogger:
         self.csv_path = self.output_dir / f"{experiment_name}.csv"
         
         # 固定 CSV 列顺序（避免字段时有时无导致列漂移）
-        self.csv_fieldnames = ['step', 'epoch', 'loss', 'mAP', 'AP_50', 'AP_75', 'AP_small', 'AP_medium', 'AP_large']
+        # 注意：与训练实际产出对齐（mAP_50 而非 AP_50，并包含 lr）
+        self.csv_fieldnames = ['step', 'epoch', 'loss', 'lr', 'mAP', 'mAP_50', 'mAP_75', 'mAP_small', 'mAP_medium', 'mAP_large']
         
         # Resume模式：加载已有指标
         self.metrics = []
