@@ -56,17 +56,36 @@ training:
   # 学习率调度
   lr_scheduler:
     type: "StepLR"
-    step_size: 1
+    step_size: 100
     gamma: 0.1
   
   # 梯度裁剪
   clip_max_norm: 0.1
   
   # 保存与日志
-  save_interval: 1  # 每个epoch保存
-  eval_interval: 1  # 每个epoch评估
-  log_interval: 10  # 每10个iter打印
+  save_interval: 1  # 每个epoch都保存
+  eval_interval: 1  # 每个epoch都评估
+  log_interval: 10  # 更频繁的日志
   
+  # === 训练基本功配置（冒烟测试） ===
+  
+  # Resume
+  resume: null
+  
+  # AMP（冒烟测试先关闭，确保基础流程稳定）
+  amp: false
+  
+  # 子集采样（100张图快速验证）
+  subset_size: 100
+  subset_seed: 42
+  subset_filter_empty: null  # null=自动（overfit过滤，常规不过滤）
+  
+  # 过拟合模式（设为true可验证小样本过拟合）
+  overfit: false
+  
+  # Progressive Resizing
+  resize_schedule: null
+
 # 验证配置
 validation:
   batch_size: 2
@@ -89,3 +108,29 @@ output:
 device:
   type: "cuda"  # cuda or cpu
   gpu_ids: [0]
+
+# ============================================================
+# 使用说明
+# ============================================================
+# 
+# 1. 基础冒烟测试（100张图 × 2 epoch）:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml
+# 
+# 2. 更快的冒烟（仅200次迭代）:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml --max-iter 200
+# 
+# 3. 小样本过拟合测试（10张图）:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml \
+#      --subset-size 10 --overfit
+# 
+# 4. 验证AMP:
+#    修改配置: amp: true
+#    python tools/train_detr.py --config configs/detr_smoke.yaml
+# 
+# 5. 验证Resume:
+#    第一次运行后，使用:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml \
+#      --resume outputs/smoke_test/checkpoint_epoch_1.pth
+# 
+# ============================================================
+

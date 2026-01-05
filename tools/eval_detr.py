@@ -32,7 +32,7 @@ def load_config(config_path: str) -> dict:
 
 
 @torch.no_grad()
-def evaluate(model, dataloader, device, coco_gt, logger, score_threshold=0.05, image_processor=None):
+def evaluate(model, dataloader, device, coco_gt, logger, score_threshold=0.05, image_processor=None, config=None):
     """
     评估模型
     
@@ -43,7 +43,8 @@ def evaluate(model, dataloader, device, coco_gt, logger, score_threshold=0.05, i
         coco_gt: COCO ground truth对象
         logger: 日志器
         score_threshold: 置信度阈值
-        image_processor: DETR图像处理器（可选）
+        image_processor: DETR图像处理器（可选，如未提供则从config构建）
+        config: 配置字典（可选，仅在image_processor=None时需要）
     
     Returns:
         评估结果字典
@@ -56,57 +57,55 @@ def evaluate(model, dataloader, device, coco_gt, logger, score_threshold=0.05, i
     
     # 初始化图像处理器（如果未提供）
     if image_processor is None:
-        image_processor = DetrImageProcessor.from_pretrained('facebook/detr-resnet-50')
+        if config is None:
+            raise ValueError("当image_processor=None时，必须提供config参数")
+        # 从配置中读取模型名称，保持与模型一致
+        model_name = config['model']['name']
+        if not model_name.startswith('facebook/'):
+            model_name = f"facebook/{model_name}"
+        logger.info(f"初始化DetrImageProcessor: {model_name}")
+        image_processor = DetrImageProcessor.from_pretrained(model_name)
     
     for images, targets in tqdm(dataloader, desc="Evaluating"):
-        # 使用DetrImageProcessor处理可变尺寸图像
-        images_pil = [img.cpu().numpy().transpose(1, 2, 0) for img in images]
-        encoding = image_processor(images=images_pil, return_tensors='pt')
+        # images是PIL.Image列表，targets是COCO格式字典列表
+        
+        # 使用DetrImageProcessor处理PIL图像
+        encoding = image_processor(images=images, return_tensors='pt')
         
         pixel_values = encoding['pixel_values'].to(device)
         pixel_mask = encoding['pixel_mask'].to(device)
         
         # 推理
-        outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask)
+        with torch.no_grad():
+            outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask)
         
-        # 解析输出
-        logits = outputs.logits  # [B, num_queries, num_classes+1]
-        boxes = outputs.pred_boxes  # [B, num_queries, 4] (cxcywh格式，归一化)
+        # 使用post_process_object_detection还原预测到原图尺寸
+        # 获取原图尺寸（从原始PIL图像）
+        target_sizes = torch.tensor([img.size[::-1] for img in images]).to(device)  # (height, width)
+        
+        # post_process会自动还原到原图尺寸并转换为xyxy格式
+        processed_outputs = image_processor.post_process_object_detection(
+            outputs,
+            threshold=score_threshold,
+            target_sizes=target_sizes
+        )
         
         # 转换为COCO格式
-        for i, target in enumerate(targets):
-            image_id = target['image_id'].item()
-            img_h, img_w = target['size'].tolist()
+        for i, (output, target) in enumerate(zip(processed_outputs, targets)):
+            image_id = target['image_id']
             
-            # 获取预测
-            scores = logits[i].softmax(-1)  # [num_queries, num_classes+1]
-            max_scores, labels = scores[:, :-1].max(-1)  # 排除background类
+            # output包含: scores, labels, boxes (xyxy格式，原图尺寸)
+            scores = output['scores']
+            labels = output['labels']
+            boxes = output['boxes']  # xyxy格式
             
-            # 转换boxes格式: cxcywh -> xyxy -> xywh (COCO格式)
-            pred_boxes = boxes[i]
-            
-            # cxcywh -> xyxy (像素坐标)
-            boxes_xyxy = torch.zeros_like(pred_boxes)
-            boxes_xyxy[:, 0] = (pred_boxes[:, 0] - pred_boxes[:, 2] / 2) * img_w  # x1
-            boxes_xyxy[:, 1] = (pred_boxes[:, 1] - pred_boxes[:, 3] / 2) * img_h  # y1
-            boxes_xyxy[:, 2] = (pred_boxes[:, 0] + pred_boxes[:, 2] / 2) * img_w  # x2
-            boxes_xyxy[:, 3] = (pred_boxes[:, 1] + pred_boxes[:, 3] / 2) * img_h  # y2
-            
-            # xyxy -> xywh (COCO格式)
-            boxes_xywh = torch.zeros_like(pred_boxes)
-            boxes_xywh[:, 0] = boxes_xyxy[:, 0]  # x
-            boxes_xywh[:, 1] = boxes_xyxy[:, 1]  # y
-            boxes_xywh[:, 2] = boxes_xyxy[:, 2] - boxes_xyxy[:, 0]  # w
-            boxes_xywh[:, 3] = boxes_xyxy[:, 3] - boxes_xyxy[:, 1]  # h
-            
-            # 过滤低置信度预测（使用传入的score_threshold参数）
-            keep = max_scores > score_threshold
-            
-            for score, label, box in zip(max_scores[keep], labels[keep], boxes_xywh[keep]):
+            # 转换为COCO的xywh格式
+            for score, label, box in zip(scores, labels, boxes):
+                x1, y1, x2, y2 = box.tolist()
                 results.append({
                     'image_id': image_id,
                     'category_id': label.item(),
-                    'bbox': box.cpu().tolist(),
+                    'bbox': [x1, y1, x2 - x1, y2 - y1],  # 转为xywh
                     'score': score.item(),
                 })
     
@@ -206,7 +205,7 @@ def main():
     print("\n🎯 开始评估")
     print(f"置信度阈值: {args.score_threshold}")
     print("="*60)
-    metrics = evaluate(model, dataloader, device, coco_gt, logger, args.score_threshold)
+    metrics = evaluate(model, dataloader, device, coco_gt, logger, args.score_threshold, config=config)
     
     # 打印结果
     print("\n" + "="*60)

@@ -47,66 +47,58 @@ class CocoDetectionDataset(Dataset):
     def __len__(self) -> int:
         return len(self.ids)
     
-    def __getitem__(self, idx: int) -> Tuple[torch.Tensor, Dict[str, Any]]:
+    def __getitem__(self, idx: int) -> Tuple[Image.Image, Dict[str, Any]]:
         """
-        返回单个样本
+        返回单个样本（原始格式，供DetrImageProcessor处理）
         
         Returns:
-            image: [3, H, W] tensor
-            target: {
-                'boxes': [N, 4] tensor (xyxy格式，归一化到[0,1])
-                'labels': [N] tensor
-                'image_id': tensor
-                'area': [N] tensor
-                'iscrowd': [N] tensor
-                'orig_size': [2] tensor (H, W)
-                'size': [2] tensor (H, W)
+            image: PIL.Image (RGB，未归一化)
+            target: COCO格式标注字典 {
+                'image_id': int,
+                'annotations': List[{
+                    'bbox': [x, y, w, h],  # COCO格式：xywh像素坐标
+                    'category_id': int,
+                    'area': float,
+                    'iscrowd': int,
+                }]
             }
         """
         img_id = self.ids[idx]
         ann_ids = self.coco.getAnnIds(imgIds=img_id)
         anns = self.coco.loadAnns(ann_ids)
         
-        # 加载图像
+        # 加载图像（PIL格式，不转tensor）
         img_info = self.coco.loadImgs(img_id)[0]
         img_path = self.img_folder / img_info['file_name']
         image = Image.open(img_path).convert('RGB')
         
-        # 解析标注
-        boxes = []
-        labels = []
-        areas = []
-        iscrowd = []
-        
+        # 构建COCO格式标注（DetrImageProcessor期望的格式）
+        annotations = []
         for ann in anns:
-            # COCO格式: [x, y, w, h]
-            x, y, w, h = ann['bbox']
-            # 转换为 [x1, y1, x2, y2]
-            boxes.append([x, y, x + w, y + h])
-            labels.append(ann['category_id'])
-            areas.append(ann['area'])
-            iscrowd.append(ann.get('iscrowd', 0))
+            annotations.append({
+                'bbox': ann['bbox'],  # 保持COCO的[x, y, w, h]格式
+                'category_id': ann['category_id'],
+                'area': ann['area'],
+                'iscrowd': ann.get('iscrowd', 0),
+            })
         
-        # 转为tensor
-        boxes = torch.as_tensor(boxes, dtype=torch.float32).reshape(-1, 4)
-        labels = torch.as_tensor(labels, dtype=torch.int64)
-        areas = torch.as_tensor(areas, dtype=torch.float32)
-        iscrowd = torch.as_tensor(iscrowd, dtype=torch.int64)
-        image_id = torch.tensor([img_id])
-        
-        # 构建target字典
         target = {
-            'boxes': boxes,
-            'labels': labels,
-            'image_id': image_id,
-            'area': areas,
-            'iscrowd': iscrowd,
-            'orig_size': torch.as_tensor([int(img_info['height']), int(img_info['width'])]),
-            'size': torch.as_tensor([int(img_info['height']), int(img_info['width'])]),
+            'image_id': img_id,
+            'annotations': annotations,
         }
         
-        # 应用数据增强
+        # 应用数据增强（如果提供）
+        # ⚠️  警告：当前实现仅对图像应用增强，bbox 不会同步变换
+        # 如需几何变换（翻转/裁剪/旋转），请使用支持 bbox 变换的库如 albumentations
+        # 或确保 transforms 仅包含颜色增强（ColorJitter 等）
         if self.transforms is not None:
+            import warnings
+            warnings.warn(
+                "当前数据增强仅作用于图像，bbox 不会同步变换。"
+                "几何变换（翻转/裁剪）会导致标注错位。"
+                "建议使用 albumentations 或仅使用颜色增强。",
+                UserWarning
+            )
             image = self.transforms(image)
         
         return image, target
@@ -116,38 +108,40 @@ def make_transforms(image_set: str, config: dict) -> Any:
     """
     构建数据增强pipeline
     
+    注意：当前版本由DetrImageProcessor统一处理resize/pad/normalize，
+    因此返回None。如需额外数据增强（如RandomHorizontalFlip、ColorJitter），
+    可在此构建torchvision.transforms.Compose并在__getitem__中对PIL图像应用。
+    
+    参考实现：
+    if image_set == 'train':
+        return transforms.Compose([
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.ColorJitter(brightness=0.2, contrast=0.2),
+        ])
+    
     Args:
         image_set: 'train' 或 'val'
         config: 配置字典
     
     Returns:
-        transform函数
+        None (当前不使用transforms，直接返回PIL图像)
     """
-    normalize = T.Compose([
-        T.ToTensor(),
-        T.Normalize(
-            config['dataset']['augmentation']['normalize']['mean'],
-            config['dataset']['augmentation']['normalize']['std']
-        )
-    ])
-    
-    # 简化版transforms：只做归一化
-    # 因为DETR的transforms需要特殊处理（同时变换image和boxes）
-    # 这里先实现最简版本
-    return normalize
+    # DetrImageProcessor会自动处理resize/pad/normalize
+    # 如需额外增强可在此添加，在__getitem__中应用到PIL图像后再传给processor
+    return None
 
 
-def collate_fn(batch: List[Tuple[torch.Tensor, Dict]]) -> Tuple[List[torch.Tensor], List[Dict]]:
+def collate_fn(batch: List[Tuple[Image.Image, Dict]]) -> Tuple[List[Image.Image], List[Dict]]:
     """
-    自定义collate函数，因为target是dict且每张图的目标数量不同
-    对于可变尺寸的图像，不使用stack，直接返回列表
+    自定义collate函数，返回原始PIL图像和COCO标注
+    供DetrImageProcessor批量处理
     
     Args:
-        batch: [(image, target), ...] 列表
+        batch: [(PIL.Image, target_dict), ...] 列表
     
     Returns:
-        images: List[Tensor] - 列表形式，支持可变尺寸
-        targets: List[Dict]
+        images: List[PIL.Image]
+        targets: List[Dict] - COCO格式标注
     """
     images, targets = zip(*batch)
     return list(images), list(targets)
@@ -161,7 +155,7 @@ def build_dataloader(
     shuffle: Optional[bool] = None,
 ) -> DataLoader:
     """
-    构建DataLoader
+    构建DataLoader，支持子集采样和过拟合模式
     
     Args:
         config: 配置字典
@@ -173,6 +167,9 @@ def build_dataloader(
     Returns:
         DataLoader
     """
+    import random
+    from torch.utils.data import Subset
+    
     # 确定参数
     if batch_size is None:
         batch_size = config['training']['batch_size'] if image_set == 'train' else config['validation']['batch_size']
@@ -188,13 +185,69 @@ def build_dataloader(
     ann_file = root / config['dataset'][f'{image_set}_ann']
     img_folder = root / 'images' / image_set
     
-    transforms = make_transforms(image_set, config)
+    # 检查是否为过拟合模式（需要在 make_transforms 之前检查）
+    overfit_mode = config['training'].get('overfit', False)
+    
+    # 构建 transforms（过拟合模式下强制为 None）
+    if overfit_mode and image_set == 'train':
+        transforms = None
+        print("📌 过拟合模式：禁用数据增强（transforms=None）")
+    else:
+        transforms = make_transforms(image_set, config)
     
     dataset = CocoDetectionDataset(
         img_folder=str(img_folder),
         ann_file=str(ann_file),
         transforms=transforms,
     )
+    
+    # 子集采样逻辑（用于快速验证或小样本过拟合）
+    subset_size = config['training'].get('subset_size')
+    
+    if subset_size and image_set == 'train':
+        # 固定随机种子以保证子集可复现
+        subset_seed = config['training'].get('subset_seed', 42)
+        random.seed(subset_seed)
+        
+        # 是否过滤空标注样本（默认仅过拟合模式下过滤）
+        # filter_empty: True=强制有标注, False=允许空标注（保持原始分布）
+        filter_empty = config['training'].get('subset_filter_empty', overfit_mode)
+        
+        if filter_empty:
+            # 筛选有标注的样本（过拟合测试必须有标注）
+            valid_indices = []
+            for idx in range(len(dataset)):
+                _, target = dataset[idx]
+                if target.get('annotations') and len(target['annotations']) > 0:
+                    valid_indices.append(idx)
+            
+            if len(valid_indices) == 0:
+                raise ValueError(f"数据集中没有找到有标注的样本，无法进行训练")
+            
+            pool_indices = valid_indices
+            print(f"🔍 已过滤空标注样本：{len(dataset)} → {len(pool_indices)} 个有效样本")
+        else:
+            # 不过滤，使用全量样本池（保持原始分布）
+            pool_indices = list(range(len(dataset)))
+            print(f"📊 使用全量样本池（包含空标注）：{len(pool_indices)} 个样本")
+        
+        # 随机选择或顺序选择
+        if overfit_mode:
+            # 过拟合模式：选择前N个样本
+            indices = pool_indices[:min(subset_size, len(pool_indices))]
+            print(f"📌 过拟合模式：从 {len(pool_indices)} 个样本中选择前 {len(indices)} 个（固定种子={subset_seed}）")
+        else:
+            # 正常子集模式：随机采样
+            sample_size = min(subset_size, len(pool_indices))
+            indices = random.sample(pool_indices, sample_size)
+            print(f"🎲 子集采样：从 {len(pool_indices)} 个样本中随机选择 {len(indices)} 个（种子={subset_seed}）")
+        
+        dataset = Subset(dataset, indices)
+        
+        # 过拟合模式下强制不打乱
+        if overfit_mode:
+            shuffle = False
+            print(f"📌 过拟合模式：关闭打乱（transforms 已在前面禁用）")
     
     # 构建DataLoader
     dataloader = DataLoader(

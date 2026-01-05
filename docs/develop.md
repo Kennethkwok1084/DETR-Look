@@ -149,10 +149,14 @@ python tools/smoke_test.py
    - eval 能跑通；
    - `best.pth` / `last.pth` 保存正常。
 4) 日志落盘：`outputs/smoke_run/metrics.json` 或 `metrics.csv`。
+5) 小样本过拟合：1~10 张图训练到 loss 明显下降（趋势为主）。
+6) Checkpoint/Resume：保存完整状态后恢复训练，确保能无缝续跑。
+7) AMP 开关验证：在冒烟阶段确认 AMP 可用（不稳定时可临时关闭）。
 
 **阶段 C：Baseline 全量训练闭环**
 1) 固化 `configs/detr_baseline.yaml` 作为对照基线。
-2) 完整训练 + 评测：
+2) 预算化搜索（海选）：先跑小预算 trial（少 epoch/小子集/低分辨率），淘汰明显差的配置。
+3) 完整训练 + 评测：
    - 训练日志（loss/lr/耗时）；
    - 验证指标（mAP/AP_small）；
    - 权重保存（best/last）。
@@ -1151,6 +1155,47 @@ python tools/train_detr.py \
 * `gpu_mem_mb`（如可采集）
 
 日志文件路径建议固定为 `outputs/<run>/metrics.json` 或 `outputs/<run>/metrics.csv`。
+
+#### 4.3.3 冒烟 + 小样本过拟合（必做）
+
+**冒烟测试（sanity run）**：100 张图 / 几百 iter，验证 dataloader、loss、反传、保存、eval 全链路不炸。  
+**小样本过拟合（overfit test）**：1~10 张图训练到 loss 明显下降（检测任务不必到 0，但趋势必须清晰）。
+
+若过拟合失败，优先检查：
+* 类别映射与标注格式；
+* bbox 坐标系与归一化逻辑；
+* 学习率是否过大/过小；
+* loss 计算与 target 组装是否一致。
+
+#### 4.3.4 Checkpoint / Resume（完整）
+
+要求保存并可恢复以下状态：
+* 模型参数；
+* optimizer / scheduler 状态；
+* AMP scaler（如启用 AMP）；
+* 当前 epoch / iter；
+* best 指标与对应权重；
+* 随机数状态（可选但推荐）。
+
+验收：从 `checkpoint` 恢复后继续训练，日志与指标连续。
+
+#### 4.3.5 预算化搜索与早停淘汰
+
+先做“小预算海选”：
+* 少 epoch / 小子集 / 低分辨率；
+* 记录 AP/AP_small 与耗时。
+
+使用 ASHA/HyperBand 类策略对差配置早停（Ray 可选），筛出少量候选再进入全量训练。
+
+#### 4.3.6 AMP 与规模化扩展
+
+* AMP 混合精度默认开启（更快、更省显存），不稳定时允许关闭。
+* DDP/FSDP/DeepSpeed 为后续规模化选项，单卡先把 AMP+checkpoint 做稳。
+
+#### 4.3.7 预训练 + Progressive Resizing
+
+* 默认使用 COCO 预训练权重进行微调，避免从零训练的不确定性。
+* Progressive Resizing：先低分辨率跑通/粗训，再逐步拉高分辨率冲 AP_small。
 
 ### 4.4 检测指标评测
 

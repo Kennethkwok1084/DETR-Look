@@ -30,9 +30,13 @@ class DETRModel(nn.Module):
         # 构建DETR配置
         if model_config.get('pretrained', True):
             # 从预训练模型加载
-            print(f"🔄 加载预训练DETR模型: {model_config['name']}")
+            model_name = model_config['name']
+            # 如果配置中没有 facebook/ 前缀，自动添加
+            if not model_name.startswith('facebook/'):
+                model_name = f"facebook/{model_name}"
+            print(f"🔄 加载预训练DETR模型: {model_name}")
             self.model = DetrForObjectDetection.from_pretrained(
-                f"facebook/{model_config['name']}",
+                model_name,
                 num_labels=num_classes,
                 ignore_mismatched_sizes=True,  # 允许类别数不匹配
             )
@@ -60,48 +64,27 @@ class DETRModel(nn.Module):
         self.bbox_loss_coef = model_config['loss_weights']['bbox_loss_coef']
         self.giou_loss_coef = model_config['loss_weights']['giou_loss_coef']
         
-    def forward(self, images: torch.Tensor, targets: list = None):
+    def forward(self, pixel_values: torch.Tensor, pixel_mask: torch.Tensor = None, labels: list = None):
         """
-        前向传播
+        前向传播（使用HF DETR标准接口）
         
         Args:
-            images: [B, 3, H, W] tensor
-            targets: List[Dict] 包含 'boxes', 'labels' 等
+            pixel_values: [B, 3, H, W] tensor（已经DetrImageProcessor处理）
+            pixel_mask: [B, H, W] tensor，标记padding区域
+            labels: List[Dict]，训练时提供，包含 'class_labels' 和 'boxes'
         
         Returns:
-            如果targets不为None，返回loss dict
+            如果labels不为None，返回loss dict
             否则返回预测结果
         """
-        if targets is not None:
-            # 训练模式：计算loss
-            # transformers的DETR需要特定格式的labels
-            labels = []
-            for t in targets:
-                # 转换boxes格式: xyxy -> cxcywh (相对坐标)
-                boxes = t['boxes'].clone()
-                img_h, img_w = t['size']
-                
-                # xyxy -> cxcywh
-                boxes_cxcywh = torch.zeros_like(boxes)
-                boxes_cxcywh[:, 0] = (boxes[:, 0] + boxes[:, 2]) / 2  # cx
-                boxes_cxcywh[:, 1] = (boxes[:, 1] + boxes[:, 3]) / 2  # cy
-                boxes_cxcywh[:, 2] = boxes[:, 2] - boxes[:, 0]  # w
-                boxes_cxcywh[:, 3] = boxes[:, 3] - boxes[:, 1]  # h
-                
-                # 归一化到[0, 1]
-                boxes_cxcywh[:, [0, 2]] /= img_w
-                boxes_cxcywh[:, [1, 3]] /= img_h
-                
-                labels.append({
-                    'class_labels': t['labels'],
-                    'boxes': boxes_cxcywh,
-                })
-            
-            outputs = self.model(pixel_values=images, labels=labels)
+        # HF DETR模型直接接受pixel_values和pixel_mask
+        if labels is not None:
+            # 训练模式
+            outputs = self.model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
             return outputs
         else:
             # 推理模式
-            outputs = self.model(pixel_values=images)
+            outputs = self.model(pixel_values=pixel_values, pixel_mask=pixel_mask)
             return outputs
 
 

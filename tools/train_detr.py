@@ -15,6 +15,7 @@ import yaml
 from tqdm import tqdm
 from pycocotools.coco import COCO
 from transformers import DetrImageProcessor
+from torch.cuda.amp import autocast, GradScaler
 
 # 添加项目根目录到路径
 project_root = Path(__file__).parent.parent
@@ -22,7 +23,7 @@ sys.path.insert(0, str(project_root))
 
 from dataset import build_dataloader
 from models import build_detr_model
-from utils import MetricsLogger, save_checkpoint, setup_logger
+from utils import MetricsLogger, save_checkpoint, load_checkpoint, setup_logger
 from tools.eval_detr import evaluate
 
 
@@ -64,8 +65,15 @@ def train_one_epoch(
     max_iters,
     log_interval,
     logger,
+    scaler=None,
+    use_amp=False,
 ):
-    """训练一个epoch"""
+    """训练一个epoch
+    
+    Args:
+        scaler: AMP GradScaler（如启用AMP）
+        use_amp: 是否使用混合精度训练
+    """
     model.train()
     
     epoch_loss = 0.0
@@ -74,39 +82,57 @@ def train_one_epoch(
     pbar = tqdm(dataloader, desc=f"Epoch {epoch}")
     
     for batch_idx, (images, targets) in enumerate(pbar):
-        # 使用DetrImageProcessor处理可变尺寸图像（自动padding并生成pixel_mask）
-        # 将Tensor列表转为PIL/numpy格式以供processor处理
-        images_pil = [img.cpu().numpy().transpose(1, 2, 0) for img in images]
+        # 使用DetrImageProcessor处理PIL图像和COCO标注
+        # images是PIL.Image列表，targets是COCO格式字典列表
+        # 
+        # HF DetrImageProcessor期望的annotations格式：
+        # List[Dict], 每个Dict包含 {'image_id': int, 'annotations': List[Dict]}
+        # 这正好是我们Dataset返回的targets格式，直接传入即可
         
-        # processor会自动padding到最大尺寸并返回pixel_values和pixel_mask
+        # 使用processor处理（自动resize/pad/normalize并转换boxes）
         encoding = image_processor(
-            images=images_pil,
-            annotations=[{'boxes': t['boxes'].tolist(), 'labels': t['labels'].tolist()} for t in targets],
+            images=images,
+            annotations=targets,  # 直接传targets，不要只传annotations列表
             return_tensors='pt'
         )
         
         # 移到设备
         pixel_values = encoding['pixel_values'].to(device)
         pixel_mask = encoding['pixel_mask'].to(device)
+        labels = encoding['labels']  # 已经是正确的格式
         
-        # 重构targets（processor可能重新排序/归一化boxes）
-        targets = [{k: v.to(device) if isinstance(v, torch.Tensor) else v 
-                   for k, v in t.items()} for t in targets]
+        # 将labels移到设备
+        labels = [
+            {
+                'class_labels': item['class_labels'].to(device),
+                'boxes': item['boxes'].to(device),
+            }
+            for item in labels
+        ]
         
-        # 前向传播
-        outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=targets)
+        # 前向传播（支持AMP）
+        if use_amp:
+            with autocast():
+                outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
+                loss = outputs.loss
+        else:
+            outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
+            loss = outputs.loss
         
-        # 计算loss
-        loss = outputs.loss
-        
-        # 反向传播
+        # 反向传播（支持AMP）
         optimizer.zero_grad()
-        loss.backward()
-        
-        # 梯度裁剪（可选）
-        # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-        
-        optimizer.step()
+        if use_amp and scaler is not None:
+            scaler.scale(loss).backward()
+            # 梯度裁剪（可选）
+            # scaler.unscale_(optimizer)
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            # 梯度裁剪（可选）
+            # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+            optimizer.step()
         
         # 记录
         epoch_loss += loss.item()
@@ -145,6 +171,10 @@ def train(config: dict, args):
     device = torch.device(config['device']['type'] if torch.cuda.is_available() else 'cpu')
     print(f"\n🔧 设备: {device}")
     
+    # AMP 配置
+    use_amp = config['training'].get('amp', False) and torch.cuda.is_available()
+    scaler = GradScaler() if use_amp else None
+    
     # 打印配置信息
     print(f"\n📋 训练配置:")
     print(f"  数据集: {config['dataset']['name']}")
@@ -153,10 +183,40 @@ def train(config: dict, args):
     print(f"  Batch Size: {config['training']['batch_size']}")
     print(f"  Max Epochs: {config['training']['max_epochs']}")
     print(f"  学习率: {config['training']['optimizer']['lr']}")
+    print(f"  AMP 混合精度: {'✓ 启用' if use_amp else '✗ 禁用'}")
     
     if args.max_iter:
         print(f"  最大迭代: {args.max_iter}")
         config['training']['max_iters'] = args.max_iter
+    
+    # 子集采样配置
+    subset_size = args.subset_size or config['training'].get('subset_size')
+    if subset_size:
+        print(f"  子集大小: {subset_size}")
+        config['training']['subset_size'] = subset_size
+    
+    overfit_mode = args.overfit or config['training'].get('overfit', False)
+    if overfit_mode:
+        print(f"  ⚠️  过拟合模式：已启用（用于验证训练流程）")
+        config['training']['overfit'] = True
+        
+        # 设置全局随机种子（保证过拟合测试可复现）
+        import random
+        import numpy as np
+        seed = config['training'].get('subset_seed', 42)
+        random.seed(seed)
+        np.random.seed(seed)
+        torch.manual_seed(seed)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(seed)
+            torch.backends.cudnn.deterministic = True
+            torch.backends.cudnn.benchmark = False
+        print(f"  🎲 全局随机种子已设置: {seed}（保证可复现）")
+    
+    # Progressive Resizing 配置
+    resize_schedule = config['training'].get('resize_schedule')
+    if resize_schedule:
+        print(f"  Progressive Resizing: {resize_schedule}")
     
     # 设置输出目录
     output_dir = setup_output_dir(config, args)
@@ -165,9 +225,13 @@ def train(config: dict, args):
     # 保存配置
     save_config(config, output_dir)
     
-    # 设置日志
+    # Resume 检查（在使用前定义）
+    resume_checkpoint = args.resume or config['training'].get('resume')
+    is_resume = bool(resume_checkpoint)
+    
+    # 设置日志（Resume 模式续写）
     logger = setup_logger('train', output_dir / 'train.log')
-    metrics_logger = MetricsLogger(output_dir)
+    metrics_logger = MetricsLogger(output_dir, resume=is_resume)
     
     # 构建数据加载器
     print("\n" + "="*60)
@@ -186,7 +250,10 @@ def train(config: dict, args):
     model = model.to(device)
     
     # 初始化图像处理器（用于可变尺寸padding）
-    image_processor = DetrImageProcessor.from_pretrained(config['model']['name'])
+    model_name = config['model']['name']
+    if not model_name.startswith('facebook/'):
+        model_name = f'facebook/{model_name}'
+    image_processor = DetrImageProcessor.from_pretrained(model_name)
     
     # 构建优化器
     print("\n📊 构建优化器")
@@ -205,6 +272,29 @@ def train(config: dict, args):
         gamma=config['training']['lr_scheduler']['gamma'],
     )
     
+    # Resume 逻辑：从 checkpoint 恢复（已在前面定义 resume_checkpoint）
+    start_epoch = 1
+    best_metric_value = None
+    
+    if resume_checkpoint:
+        print("\n" + "="*60)
+        print(f"🔄 从 checkpoint 恢复训练: {resume_checkpoint}")
+        print("="*60)
+        checkpoint = load_checkpoint(
+            checkpoint_path=Path(resume_checkpoint),
+            model=model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+            scaler=scaler,
+            device=device,
+            restore_rng_state=True,
+        )
+        start_epoch = checkpoint.get('epoch', 0) + 1  # 从下一个epoch继续
+        best_metric_value = checkpoint.get('best_metric')
+        print(f"将从 Epoch {start_epoch} 继续训练")
+        if best_metric_value is not None:
+            print(f"历史最佳指标: {best_metric_value:.4f}")
+    
     # 训练循环
     print("\n" + "="*60)
     print("🎯 开始训练")
@@ -222,13 +312,56 @@ def train(config: dict, args):
     coco_gt = COCO(val_ann_file)
     
     best_loss = float('inf')
-    best_map = 0.0
+    best_map = 0.0 if best_metric_value is None else best_metric_value
     start_time = time.time()
     
-    for epoch in range(1, max_epochs + 1):
+    # 检查 Resume 后 epoch 范围是否有效
+    skip_training = False
+    if start_epoch > max_epochs:
+        logger.warning(f"⚠️  Resume 的起始 epoch ({start_epoch}) 已超过 max_epochs ({max_epochs})")
+        logger.warning(f"    → 训练将直接结束，不会执行新的 epoch")
+        logger.warning(f"    → 建议增加 max_epochs 或检查 checkpoint")
+        logger.warning(f"    → 将跳过训练和最终保存，避免覆盖已有 checkpoint")
+        skip_training = True
+    
+    for epoch in range(start_epoch, max_epochs + 1):
         logger.info(f"\n{'='*60}")
         logger.info(f"Epoch {epoch}/{max_epochs}")
         logger.info(f"{'='*60}")
+        
+        # Progressive Resizing: 根据 epoch 调整输入分辨率
+        if resize_schedule:
+            # resize_schedule 格式: [[epoch1, size1], [epoch2, size2], ...]
+            # 或 [[epoch1, {"shortest": s, "longest": l}], ...]
+            current_size = None
+            for schedule_epoch, size_config in resize_schedule:
+                if epoch >= schedule_epoch:
+                    current_size = size_config
+            
+            if current_size:
+                # 支持两种格式：整数或字典
+                if isinstance(current_size, dict):
+                    # 字典格式：兼容两种键名
+                    # {"shortest": 640, "longest": 1333} 或 {"shortest_edge": 640, "longest_edge": 1333}
+                    shortest = current_size.get('shortest') or current_size.get('shortest_edge', 800)
+                    longest = current_size.get('longest') or current_size.get('longest_edge', 1333)
+                else:
+                    # 整数格式：短边为该值，长边使用默认上限
+                    shortest = current_size
+                    longest = 1333  # DETR 默认上限
+                
+                # 兼容不同版本的 transformers API
+                # 旧版本：size + max_size
+                # 新版本：size={"shortest_edge": ..., "longest_edge": ...}
+                try:
+                    # 尝试新版本 API (transformers >= 4.26)
+                    image_processor.size = {"shortest_edge": shortest, "longest_edge": longest}
+                except (TypeError, AttributeError):
+                    # 回退到旧版本 API
+                    image_processor.size = shortest
+                    image_processor.max_size = longest
+                
+                logger.info(f"Progressive Resizing: shortest_edge={shortest}, max_size={longest}")
         
         # 训练一个epoch
         avg_loss = train_one_epoch(
@@ -241,6 +374,8 @@ def train(config: dict, args):
             max_iters=max_iters,
             log_interval=log_interval,
             logger=logger,
+            scaler=scaler,
+            use_amp=use_amp,
         )
         
         # 更新学习率
@@ -261,6 +396,7 @@ def train(config: dict, args):
                 logger=logger,
                 score_threshold=0.05,
                 image_processor=image_processor,
+                config=config,
             )
             logger.info(f"验证结果: mAP={val_metrics.get('mAP', 0):.4f}, "
                        f"mAP@50={val_metrics.get('mAP_50', 0):.4f}, "
@@ -277,7 +413,7 @@ def train(config: dict, args):
         
         logger.info(f"Epoch {epoch} 完成 - Avg Loss: {avg_loss:.4f}, LR: {current_lr:.6f}")
         
-        # 保存checkpoint
+        # 保存checkpoint（完整状态）
         if epoch % save_interval == 0:
             save_checkpoint(
                 model=model,
@@ -287,6 +423,10 @@ def train(config: dict, args):
                 metrics=metrics,
                 output_dir=output_dir,
                 filename=f"checkpoint_epoch_{epoch}.pth",
+                scheduler=scheduler,
+                scaler=scaler,
+                best_metric=best_map if best_map > 0 else None,
+                save_rng_state=True,
             )
         
         # 保存最佳模型（基于验证mAP，如果没有验证则使用训练loss）
@@ -304,6 +444,10 @@ def train(config: dict, args):
                     output_dir=output_dir,
                     filename="best.pth",
                     is_best=True,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    best_metric=best_map,
+                    save_rng_state=True,
                 )
         else:  # 没有验证时使用训练loss
             if avg_loss < best_loss:
@@ -318,6 +462,10 @@ def train(config: dict, args):
                     output_dir=output_dir,
                     filename="best.pth",
                     is_best=True,
+                    scheduler=scheduler,
+                    scaler=scaler,
+                    best_metric=None,  # 使用loss时不记录best_metric
+                    save_rng_state=True,
                 )
         
         # 如果设置了max_iters且已达到预期epoch数，停止训练
@@ -326,15 +474,33 @@ def train(config: dict, args):
             logger.info(f"冒烟测试模式：已完成 {epoch} 个epoch，停止训练")
             break
     
+    # 如果因 start_epoch > max_epochs 跳过了训练，不保存 last.pth
+    if skip_training:
+        logger.warning("⚠️  已跳过训练，不保存 last.pth 以避免覆盖已有模型")
+        logger.info(f"\n{'='*60}")
+        logger.info("训练已结束（未执行新 epoch）")
+        logger.info(f"{'='*60}")
+        return
+    
+    # 确保 epoch 和 metrics 始终有定义（避免空循环崩溃）
+    if 'epoch' not in locals():
+        epoch = start_epoch - 1
+    if 'metrics' not in locals():
+        metrics = {'loss': 0.0, 'mAP': best_map}
+    
     # 保存最终模型
     save_checkpoint(
         model=model,
         optimizer=optimizer,
         epoch=epoch,
-        step=epoch * len(train_loader),
+        step=epoch * len(train_loader) if epoch > 0 else 0,
         metrics=metrics,
         output_dir=output_dir,
         filename="last.pth",
+        scheduler=scheduler,
+        scaler=scaler,
+        best_metric=best_map if best_map > 0 else None,
+        save_rng_state=True,
     )
     
     elapsed_time = time.time() - start_time
@@ -392,6 +558,17 @@ def main():
         type=str,
         default=None,
         help="从checkpoint恢复训练",
+    )
+    parser.add_argument(
+        "--subset-size",
+        type=int,
+        default=None,
+        help="子集大小（用于快速验证或小样本过拟合）",
+    )
+    parser.add_argument(
+        "--overfit",
+        action="store_true",
+        help="过拟合模式（关闭数据增强，固定随机种子）",
     )
     
     args = parser.parse_args()

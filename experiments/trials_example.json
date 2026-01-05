@@ -1,0 +1,32 @@
+[
+  {
+    "training.optimizer.lr": 1e-4,
+    "training.batch_size": 4,
+    "model.num_encoder_layers": 6,
+    "model.num_decoder_layers": 6
+  },
+  {
+    "training.optimizer.lr": 5e-5,
+    "training.batch_size": 4,
+    "model.num_encoder_layers": 6,
+    "model.num_decoder_layers": 6
+  },
+  {
+    "training.optimizer.lr": 2e-4,
+    "training.batch_size": 4,
+    "model.num_encoder_layers": 6,
+    "model.num_decoder_layers": 6
+  },
+  {
+    "training.optimizer.lr": 1e-4,
+    "training.batch_size": 8,
+    "model.num_encoder_layers": 6,
+    "model.num_decoder_layers": 6
+  },
+  {
+    "training.optimizer.lr": 1e-4,
+    "training.batch_size": 4,
+    "model.num_encoder_layers": 4,
+    "model.num_decoder_layers": 4
+  }
+]

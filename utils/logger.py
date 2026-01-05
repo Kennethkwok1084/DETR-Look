@@ -53,14 +53,15 @@ def setup_logger(name: str, log_file: Optional[Path] = None, level=logging.INFO)
 class MetricsLogger:
     """
     指标记录器
-    支持JSON和CSV格式输出
+    支持JSON和CSV格式输出，支持Resume模式续写
     """
     
-    def __init__(self, output_dir: Path, experiment_name: str = "metrics"):
+    def __init__(self, output_dir: Path, experiment_name: str = "metrics", resume: bool = False):
         """
         Args:
             output_dir: 输出目录
             experiment_name: 实验名称
+            resume: 是否Resume模式（加载已有指标）
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -68,8 +69,35 @@ class MetricsLogger:
         self.json_path = self.output_dir / f"{experiment_name}.json"
         self.csv_path = self.output_dir / f"{experiment_name}.csv"
         
-        self.metrics_history = []
+        # 固定 CSV 列顺序（避免字段时有时无导致列漂移）
+        self.csv_fieldnames = ['step', 'epoch', 'loss', 'mAP', 'AP_50', 'AP_75', 'AP_small', 'AP_medium', 'AP_large']
+        
+        # Resume模式：加载已有指标
+        self.metrics = []
+        json_loaded = False
+        if resume and self.json_path.exists():
+            try:
+                with open(self.json_path, 'r') as f:
+                    self.metrics = json.load(f)
+                json_loaded = True
+                print(f"📂 Resume: 已加载 {len(self.metrics)} 条历史指标")
+            except Exception as e:
+                print(f"⚠️  无法加载历史指标: {e}，从空列表开始")
+                self.metrics = []
+        
+        # CSV 状态：Resume 时检查是否已有 CSV
         self.csv_header_written = False
+        csv_exists = resume and self.csv_path.exists()
+        if csv_exists:
+            # 已有 CSV，设置为已写入 header（后续用 append 模式）
+            self.csv_header_written = True
+            print(f"📂 Resume: 将续写 CSV 文件")
+        
+        # 一致性检查：Resume 时 CSV 存在但 JSON 不存在（或加载失败）
+        if resume and csv_exists and not json_loaded:
+            print(f"⚠️  警告: CSV 存在但 JSON 缺失/损坏")
+            print(f"    → CSV 将继续追加，但历史指标无法在 JSON 中体现")
+            print(f"    → 建议检查 {self.json_path} 或手动恢复")
     
     def log(self, metrics: Dict[str, Any], step: int, epoch: int):
         """
@@ -85,31 +113,34 @@ class MetricsLogger:
             'epoch': epoch,
             **metrics
         }
-        self.metrics_history.append(record)
+        self.metrics.append(record)
         
-        # 保存JSON（追加模式）
+        # 保存JSON（完整覆盖）
         with open(self.json_path, 'w', encoding='utf-8') as f:
-            json.dump(self.metrics_history, f, indent=2)
+            json.dump(self.metrics, f, indent=2)
         
         # 保存CSV
         self._write_csv(record)
     
     def _write_csv(self, record: Dict[str, Any]):
-        """写入CSV文件"""
+        """写入CSV文件（使用固定列顺序）"""
         import csv
         
         mode = 'w' if not self.csv_header_written else 'a'
         
+        # 使用固定字段，缺失字段填充空字符串
+        row = {field: record.get(field, '') for field in self.csv_fieldnames}
+        
         with open(self.csv_path, mode, newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=record.keys())
+            writer = csv.DictWriter(f, fieldnames=self.csv_fieldnames)
             
             if not self.csv_header_written:
                 writer.writeheader()
                 self.csv_header_written = True
             
-            writer.writerow(record)
+            writer.writerow(row)
     
-    def get_best(self, metric_name: str, mode: str = 'max') -> Dict[str, Any]:
+    def get_best(self, metric_name: str, mode: str = 'max') -> Optional[Dict[str, Any]]:
         """
         获取最佳指标记录
         
@@ -118,14 +149,17 @@ class MetricsLogger:
             mode: 'max' 或 'min'
         
         Returns:
-            最佳记录字典
+            最佳记录字典，或 None
         """
-        if not self.metrics_history:
-            return {}
+        if not self.metrics:
+            return None
+        
+        # 过滤出包含该指标的记录
+        valid_records = [r for r in self.metrics if metric_name in r]
+        if not valid_records:
+            return None
         
         if mode == 'max':
-            best_record = max(self.metrics_history, key=lambda x: x.get(metric_name, float('-inf')))
+            return max(valid_records, key=lambda x: x[metric_name])
         else:
-            best_record = min(self.metrics_history, key=lambda x: x.get(metric_name, float('inf')))
-        
-        return best_record
+            return min(valid_records, key=lambda x: x[metric_name])
