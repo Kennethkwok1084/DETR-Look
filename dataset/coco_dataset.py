@@ -233,21 +233,37 @@ def build_dataloader(
         
         # 是否过滤空标注样本（默认仅过拟合模式下过滤）
         # filter_empty: True=强制有标注, False=允许空标注（保持原始分布）
+        # None (或 null) 表示 "auto"：在 overfit 模式下过滤，否则不过滤
         filter_empty = config['training'].get('subset_filter_empty', overfit_mode)
+        if filter_empty is None:  # 处理 subset_filter_empty: null 的情况
+            filter_empty = overfit_mode
         
         if filter_empty:
-            # 筛选有标注的样本（过拟合测试必须有标注）
-            valid_indices = []
-            for idx in range(len(dataset)):
-                _, target = dataset[idx]
-                if target.get('annotations') and len(target['annotations']) > 0:
-                    valid_indices.append(idx)
+            # 优先使用 COCO 元数据以避免逐样本加载图像
+            if hasattr(dataset, 'coco') and hasattr(dataset, 'ids'):
+                # 从 COCO 标注中收集所有有标注的 image_id
+                ann_list = dataset.coco.dataset.get('annotations', [])
+                img_ids_with_ann = {ann['image_id'] for ann in ann_list if 'image_id' in ann}
+                # 根据 dataset.ids 中的 image_id 映射回数据集索引
+                valid_indices = [
+                    idx for idx, img_id in enumerate(dataset.ids)
+                    if img_id in img_ids_with_ann
+                ]
+                print(f"🚀 使用 COCO API 快速过滤：{len(dataset)} → {len(valid_indices)} 个有效样本")
+            else:
+                # 回退到逐样本检查逻辑（可能较慢）
+                print("⚠️  未检测到 COCO API，使用逐样本检查（可能较慢）...")
+                valid_indices = []
+                for idx in range(len(dataset)):
+                    _, target = dataset[idx]
+                    if target.get('annotations') and len(target['annotations']) > 0:
+                        valid_indices.append(idx)
+                print(f"🔍 已过滤空标注样本：{len(dataset)} → {len(valid_indices)} 个有效样本")
             
             if len(valid_indices) == 0:
                 raise ValueError(f"数据集中没有找到有标注的样本，无法进行训练")
             
             pool_indices = valid_indices
-            print(f"🔍 已过滤空标注样本：{len(dataset)} → {len(pool_indices)} 个有效样本")
         else:
             # 不过滤，使用全量样本池（保持原始分布）
             pool_indices = list(range(len(dataset)))

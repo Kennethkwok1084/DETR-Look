@@ -350,6 +350,19 @@ def train(config: dict, args):
                     shortest = current_size
                     longest = 1333  # DETR 默认上限
                 
+                # 基本数值验证，避免无效尺寸
+                try:
+                    shortest = int(shortest)
+                    longest = int(longest)
+                    if shortest <= 0 or longest <= 0 or shortest > longest:
+                        raise ValueError(f"Invalid size: shortest={shortest}, longest={longest}")
+                except (TypeError, ValueError) as e:
+                    logger.warning(
+                        f"Progressive Resizing 跳过：无效的尺寸配置 "
+                        f"(shortest={shortest}, longest={longest}): {e}"
+                    )
+                    continue  # 跳过该 epoch 的 resizing
+                
                 # 兼容不同版本的 transformers API
                 # 旧版本：size + max_size
                 # 新版本：size={"shortest_edge": ..., "longest_edge": ...}
@@ -486,7 +499,9 @@ def train(config: dict, args):
     if 'epoch' not in locals():
         epoch = start_epoch - 1
     if 'metrics' not in locals():
-        metrics = {'loss': 0.0, 'mAP': best_map}
+        # 处理 best_map 为 None 的情况（避免 metrics 包含 None 值）
+        safe_best_map = best_map if best_map is not None else 0.0
+        metrics = {'loss': 0.0, 'mAP': safe_best_map}
     
     # 保存最终模型
     save_checkpoint(

@@ -109,8 +109,25 @@ def run_trial(
     ]
     
     try:
-        result = subprocess.run(cmd, check=True, capture_output=True, text=True)
-        print(result.stdout)
+        # 将训练输出流式写入日志文件，避免在内存中缓冲大量 stdout/stderr
+        log_file = trial_output_dir / "train.log"
+        print(f"📝 训练输出将写入: {log_file}")
+        
+        with open(log_file, "w", encoding="utf-8") as log_f:
+            result = subprocess.run(
+                cmd,
+                check=True,
+                stdout=log_f,
+                stderr=subprocess.STDOUT,
+                text=True
+            )
+        
+        # 输出最后几行供参考
+        with open(log_file, "r", encoding="utf-8") as log_f:
+            lines = log_f.readlines()
+            if lines:
+                print("\n最后几行输出:")
+                print("".join(lines[-10:]))  # 显示最后10行
         
         # 读取metrics（假设保存在metrics.json中）
         metrics_file = trial_output_dir / "metrics.json"
@@ -191,15 +208,13 @@ def run_trials(
         result['params'] = trial_params
         results.append(result)
         
-        # 早停检查（真正跳过后续 trial）
+        # 早停检查：当 mAP 低于阈值时，标记为淘汰并跳过后续 trial
         if early_stop_threshold is not None:
             if result['final_map'] < early_stop_threshold:
                 print(f"\n⚠️  Trial {i+1} mAP ({result['final_map']:.4f}) "
-                      f"低于阈值 ({early_stop_threshold:.4f})，标记为淘汰")
+                      f"低于阈值 ({early_stop_threshold:.4f})，标记为淘汰并提前停止后续试验")
                 result['early_stopped'] = True
-                # 注意：当前实现为顺序执行，不跳过后续trial
-                # 若需真正停止，可在此 break（但会丢失后续配置的尝试）
-                # 建议：记录淘汰标记，最终汇总时过滤
+                break  # 真正跳过后续 trial
             else:
                 result['early_stopped'] = False
     
