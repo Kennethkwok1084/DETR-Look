@@ -1,0 +1,27 @@
+# 深度学习核心
+torch>=2.0.0
+torchvision>=0.15.0
+transformers>=4.30.0
+timm>=0.9.0  # DETR backbone需要
+
+# 数据处理
+numpy>=1.24.0
+pillow>=9.5.0
+opencv-python>=4.7.0
+
+# COCO数据集
+pycocotools>=2.0.6
+
+# 配置与日志
+pyyaml>=6.0
+tqdm>=4.65.0
+
+# 可视化（后续阶段）
+matplotlib>=3.7.0
+# streamlit>=1.22.0  # Streamlit阶段再安装
+
+# 跟踪评测（后续阶段）
+# trackeval  # 跟踪阶段再安装
+
+# 其他工具
+scipy>=1.10.0

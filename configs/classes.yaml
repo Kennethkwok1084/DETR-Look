@@ -1,0 +1,39 @@
+# 交通场景目标检测粗粒度类别定义
+# 用于BDD100K数据集的类别映射和DETR训练
+#
+# 说明：本配置文件是类别映射的唯一真源（配置驱动）
+# convert_to_coco.py 从此文件读取映射规则，不再硬编码
+
+# 粗粒度类别定义（ID -> 名称）
+# 约束：ID必须从0开始连续
+COARSE_CLASSES:
+  0: vehicle        # 包含 car, bus, truck 等交通工具
+  1: traffic_sign   # 路牌/交通标志
+  2: traffic_light  # 红绿灯
+
+# BDD100K原始类别到粗粒度类别的映射
+# 约束：value必须存在于COARSE_CLASSES中
+BDD100K_MAPPING:
+  car: vehicle
+  bus: vehicle
+  truck: vehicle
+  traffic sign: traffic_sign
+  traffic light: traffic_light
+  # bike 和 motor 可通过MAPPING_OPTIONS动态控制
+
+# CCTSDB类别到粗粒度类别的映射
+CCTSDB_MAPPING:
+  prohibitory: traffic_sign
+  warning: traffic_sign
+  mandatory: traffic_sign
+
+# TT100K目标类别（所有标志统一映射到该类）
+TT100K_TARGET: traffic_sign
+
+# 映射选项
+MAPPING_OPTIONS:
+  include_bike: false      # 是否将自行车并入指定类别
+  bike_target: vehicle     # 自行车映射到的目标类别（需存在于COARSE_CLASSES）
+  include_motor: false     # 是否将摩托车并入指定类别
+  motor_target: vehicle    # 摩托车映射到的目标类别（需存在于COARSE_CLASSES）
+  min_area: 0              # 最小bbox面积过滤阈值（像素）

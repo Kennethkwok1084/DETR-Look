@@ -1,0 +1,102 @@
+# DETR Baseline 配置
+# 用于交通场景目标检测的基础训练配置
+
+# 数据集配置
+dataset:
+  name: "bdd100k_traffic"
+  root_dir: "data/traffic_coco/bdd100k_det"
+  train_ann: "annotations/instances_train.json"
+  val_ann: "annotations/instances_val.json"
+  test_ann: "annotations/instances_test.json"
+  num_classes: 3  # vehicle, traffic_sign, traffic_light
+  
+  # 数据增强
+  augmentation:
+    random_horizontal_flip: true
+    random_crop: false
+    color_jitter: true
+    normalize:
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+# 模型配置
+model:
+  name: "detr-resnet-50"  # Hugging Face模型ID
+  backbone: "resnet50"
+  pretrained: true
+  num_queries: 100
+  hidden_dim: 256
+  nheads: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  
+  # 损失权重
+  loss_weights:
+    class_loss_coef: 1.0
+    bbox_loss_coef: 5.0
+    giou_loss_coef: 2.0
+    eos_coef: 0.1  # 空类别权重
+
+# 训练配置
+training:
+  batch_size: 4
+  num_workers: 4
+  max_epochs: 50
+  max_iters: null  # 如果设置则优先使用iter
+  
+  # 优化器
+  optimizer:
+    type: "AdamW"
+    lr: 1e-4
+    weight_decay: 1e-4
+    betas: [0.9, 0.999]
+  
+  # 学习率调度
+  lr_scheduler:
+    type: "StepLR"
+    step_size: 40
+    gamma: 0.1
+  
+  # 梯度裁剪
+  clip_max_norm: 0.1
+  
+  # 保存与日志
+  save_interval: 5  # 每N个epoch保存一次
+  eval_interval: 1  # 每N个epoch评估一次
+  log_interval: 50  # 每N个iter打印一次
+  
+# 验证配置
+validation:
+  batch_size: 4
+  num_workers: 4
+  
+# 测试配置
+testing:
+  batch_size: 1
+  confidence_threshold: 0.7
+  nms_threshold: 0.5
+
+# 输出配置
+output:
+  base_dir: "outputs"
+  experiment_name: "detr_baseline"
+  save_best_only: false
+  tensorboard: true
+  
+# 冒烟测试配置（快速验证训练流程）
+smoke_test:
+  max_iters: 200
+  eval_interval: 100
+  save_interval: 100
+  batch_size: 2
+  num_workers: 2
+
+# 设备配置
+device:
+  type: "cuda"  # cuda or cpu
+  gpu_ids: [0]
+  
+# 随机种子
+seed: 42
