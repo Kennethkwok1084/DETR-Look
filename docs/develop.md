@@ -393,6 +393,148 @@ detr_traffic_analysis/
 * 要求数据集中包含：车辆与交通标志类标注；
 * 将原始数据存放于 `data/raw/` 目录下。
 
+### 3.2.1 第1-2步所需压缩包与落盘路径
+
+本节仅覆盖“检测数据准备+COCO转换”所需内容，按当前代码适配规则整理。
+
+#### BDD100K（检测任务所需）
+
+**必需压缩包**（基于历史沟通：使用逐图 JSON 标注）：
+
+- `/mnt/TrainingData/bdd100k_images_100k.zip`（图像）
+- `/mnt/TrainingData/bdd100k_labels.zip`（逐图 JSON 标注，实际使用）
+
+**可选/不用于第1-2步**：
+
+- `/mnt/TrainingData/bdd100k_det_20_labels.zip`（若内含 det_20 JSON 可选用，否则忽略）
+- `/mnt/TrainingData/bdd100k_drivable_maps.zip`（车道可行驶区域，不用）
+- `/mnt/TrainingData/bdd100k_seg_maps.zip`、`bdd100k_seg_track_20_images.zip`（分割相关，不用）
+- `/mnt/TrainingData/images20-track-*.zip`（MOT 跟踪相关，不用第1-2步）
+- `/mnt/TrainingData/bdd100k_info.zip`、`bdd100k.torrent`、`BDDA.zip`（非必要）
+
+**解压与落盘**：
+
+```bash
+# 1) BDD100K 图像
+mkdir -p data/raw/bdd100k
+unzip -q /mnt/TrainingData/bdd100k_images_100k.zip -d data/raw/bdd100k
+
+# 2) BDD100K 逐图 JSON 标注（实际使用）
+unzip -q /mnt/TrainingData/bdd100k_labels.zip -d data/raw/bdd100k
+```
+
+**期望目录结构**（满足转换脚本的默认搜索路径）：
+
+```text
+data/raw/bdd100k/
+├── images/100k/{train,val,test}/
+└── labels/
+    ├── bdd100k/{train,val,test}/*.json  # 逐图 JSON（实际使用）
+    ├── bd100k/{train,val,test}/*.json   # 历史命名兼容
+    ├── det_20/det_{split}.json          # 聚合 JSON（可选）
+    ├── det_{split}.json                 # 旧版兼容（可选）
+    └── det_20_{split}.json              # 扁平命名兼容（可选）
+```
+
+#### CCTSDB（交通标志）
+
+**必需压缩包**（本项目使用 XML 标注）：
+
+- `train_img.zip`（训练图像）
+- `test_img.zip`（测试图像）
+- `xml.zip`（VOC XML 标注）
+
+**不使用的压缩包**（本流程不解析 TXT/分类包）：
+
+- `train_labels.zip`（TXT 标注，当前不解析）
+- `Classification based on size of traffic signs.zip`
+- `Classification based on weather and environment.zip`
+- `negative samples.zip`
+
+**解压与落盘**：
+
+```bash
+mkdir -p data/raw/cctsdb
+unzip -q /mnt/TrainingData/train_img.zip -d data/raw/cctsdb/images/train
+unzip -q /mnt/TrainingData/test_img.zip -d data/raw/cctsdb/images/test
+unzip -q /mnt/TrainingData/xml.zip -d data/raw/cctsdb/labels/xml
+```
+
+**期望目录结构**：
+
+```text
+data/raw/cctsdb/
+├── images/{train,test}/
+└── labels/xml/*.xml
+```
+
+#### TT100K（交通标志）
+
+**必需压缩包**：
+
+- `/mnt/TrainingData/tt100k_2021.zip`
+
+**解压与落盘**：
+
+```bash
+mkdir -p data/raw/tt100k
+unzip -q /mnt/TrainingData/tt100k_2021.zip -d data/raw/tt100k
+```
+
+**期望目录结构**：
+
+```text
+data/raw/tt100k/
+├── annotations_all.json
+├── train/
+├── test/
+└── other/               # 允许存在，不影响转换
+```
+
+> 注意：TT100K 转换使用 `annotations_all.json` + `train/test` 目录；CCTSDB 转换只使用 XML 标注。
+
+### 3.2.2 数据集一键部署工具（脚本）
+
+当所有压缩包集中放在一个目录时，可使用脚本一次性解压并整理到 `data/raw/`。
+
+**脚本路径**：`tools/deploy_datasets.py`
+
+**用法示例**（解压全部数据集）：
+
+```bash
+python tools/deploy_datasets.py \
+  --src-dir /mnt/TrainingData \
+  --dst-root data/raw \
+  --datasets bdd100k,cctsdb,tt100k
+```
+
+**仅部署 BDD100K（逐图 JSON）**：
+
+```bash
+python tools/deploy_datasets.py \
+  --src-dir /mnt/TrainingData \
+  --dst-root data/raw \
+  --datasets bdd100k
+```
+
+**可选：同时解压 det_20 标注包**（若其中含 JSON）：
+
+```bash
+python tools/deploy_datasets.py \
+  --src-dir /mnt/TrainingData \
+  --dst-root data/raw \
+  --datasets bdd100k \
+  --with-det20
+```
+
+**脚本行为说明**：
+
+- BDD100K：解压 `bdd100k_images_100k.zip` + `bdd100k_labels.zip` 到 `data/raw/bdd100k/`。
+- CCTSDB：解压 `train_img.zip`、`test_img.zip`、`xml.zip`，整理为 `images/{train,test}` 与 `labels/xml`。
+- TT100K：解压 `tt100k_2021.zip`，自动识别 `annotations_all.json` 所在根目录并整理到 `data/raw/tt100k/`。
+
+> 脚本不会修改压缩包内容，只做解压和目录整理；如目标目录已存在可使用 `--force` 先清理。
+
 BDD100K数据集结构示例：
 
 ```text

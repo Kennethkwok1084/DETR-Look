@@ -450,6 +450,7 @@ def convert_cctsdb_to_coco(
     img_src_candidates = [
         Path(src_dir) / "images" / split,
         Path(src_dir) / split,
+        Path(src_dir) / f"{split}_img",  # 支持 train_img, test_img 格式
     ]
     img_src_dir = next((p for p in img_src_candidates if p.exists()), img_src_candidates[0])
 
@@ -504,10 +505,13 @@ def convert_cctsdb_to_coco(
 
     print(f"📂 加载 {split} 集XML标注: {label_src_dir}")
     for img_idx, xml_path in enumerate(tqdm(xml_files, desc=f"Processing {split}")):
-        data = parse_cctsdb_xml(xml_path)
-        img_name = resolve_image_name(img_src_dir, data["name"])
-        if Path(img_name).stem not in image_files:
+        # CCTSDB: XML文件名即为真实图像ID
+        xml_stem = xml_path.stem
+        if xml_stem not in image_files:
             continue
+        
+        data = parse_cctsdb_xml(xml_path)
+        img_name = image_files[xml_stem]  # 使用实际的图像文件名（带扩展名）
 
         width = data.get("width", 0)
         height = data.get("height", 0)
