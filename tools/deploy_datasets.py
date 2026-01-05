@@ -80,7 +80,7 @@ def find_dir_with_suffix(root: Path, suffixes: Sequence[str]) -> Optional[Path]:
     return candidates[0][2]
 
 
-def deploy_cctsdb(src_dir: Path, dst_root: Path) -> None:
+def deploy_cctsdb(src_dir: Path, dst_root: Path, tmp_base: Path) -> None:
     print("\n== 部署 CCTSDB ==")
     dst_dir = dst_root / "cctsdb"
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -92,7 +92,8 @@ def deploy_cctsdb(src_dir: Path, dst_root: Path) -> None:
     if not train_zip.exists() or not test_zip.exists() or not xml_zip.exists():
         raise FileNotFoundError("CCTSDB 缺少 train_img.zip/test_img.zip/xml.zip")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    tmp_base.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
         tmp_path = Path(tmp_dir)
         train_tmp = tmp_path / "train_zip"
         test_tmp = tmp_path / "test_zip"
@@ -117,7 +118,7 @@ def deploy_cctsdb(src_dir: Path, dst_root: Path) -> None:
         move_tree(xml_src, dst_dir / "labels" / "xml")
 
 
-def deploy_tt100k(src_dir: Path, dst_root: Path) -> None:
+def deploy_tt100k(src_dir: Path, dst_root: Path, tmp_base: Path) -> None:
     print("\n== 部署 TT100K ==")
     dst_dir = dst_root / "tt100k"
     dst_dir.mkdir(parents=True, exist_ok=True)
@@ -126,7 +127,8 @@ def deploy_tt100k(src_dir: Path, dst_root: Path) -> None:
     if not tt_zip.exists():
         raise FileNotFoundError(f"TT100K 压缩包不存在: {tt_zip}")
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    tmp_base.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=tmp_base) as tmp_dir:
         tmp_path = Path(tmp_dir)
         extract_zip(tt_zip, tmp_path)
 
@@ -157,6 +159,11 @@ def main() -> None:
         help="同时解压 bdd100k_det_20_labels.zip（可选）",
     )
     parser.add_argument(
+        "--tmp-dir",
+        default=None,
+        help="临时解压目录（默认使用 dst-root 下的 .tmp）",
+    )
+    parser.add_argument(
         "--force",
         action="store_true",
         help="如目标目录已存在则先删除",
@@ -175,14 +182,15 @@ def main() -> None:
         shutil.rmtree(dst_root)
 
     dst_root.mkdir(parents=True, exist_ok=True)
+    tmp_base = Path(args.tmp_dir) if args.tmp_dir else (dst_root / ".tmp")
     datasets = normalize_datasets(args.datasets)
 
     if "bdd100k" in datasets:
         deploy_bdd100k(src_dir, dst_root, args.with_det20)
     if "cctsdb" in datasets:
-        deploy_cctsdb(src_dir, dst_root)
+        deploy_cctsdb(src_dir, dst_root, tmp_base)
     if "tt100k" in datasets:
-        deploy_tt100k(src_dir, dst_root)
+        deploy_tt100k(src_dir, dst_root, tmp_base)
 
     print("\n✅ 数据集部署完成")
 
