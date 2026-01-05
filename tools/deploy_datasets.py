@@ -5,7 +5,7 @@ import sys
 import tempfile
 import zipfile
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence, Tuple
 
 
 def extract_zip(zip_path: Path, dst_dir: Path) -> None:
@@ -59,6 +59,27 @@ def deploy_bdd100k(src_dir: Path, dst_root: Path, use_det20: bool) -> None:
         extract_zip(det20_zip, dst_dir)
 
 
+def find_dir_with_suffix(root: Path, suffixes: Sequence[str]) -> Optional[Path]:
+    suffixes = tuple(s.lower() for s in suffixes)
+    if root.exists():
+        if any(p.is_file() and p.suffix.lower() in suffixes for p in root.iterdir()):
+            return root
+    candidates: list[Tuple[int, int, Path]] = []
+    for path in root.rglob("*"):
+        if not path.is_dir():
+            continue
+        files = [p for p in path.iterdir() if p.is_file() and p.suffix.lower() in suffixes]
+        if not files:
+            continue
+        depth = len(path.relative_to(root).parts)
+        candidates.append((len(files), depth, path))
+    if not candidates:
+        return None
+    # 选取文件数最多且层级最浅的目录
+    candidates.sort(key=lambda item: (-item[0], item[1]))
+    return candidates[0][2]
+
+
 def deploy_cctsdb(src_dir: Path, dst_root: Path) -> None:
     print("\n== 部署 CCTSDB ==")
     dst_dir = dst_root / "cctsdb"
@@ -73,13 +94,20 @@ def deploy_cctsdb(src_dir: Path, dst_root: Path) -> None:
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_path = Path(tmp_dir)
-        extract_zip(train_zip, tmp_path)
-        extract_zip(test_zip, tmp_path)
-        extract_zip(xml_zip, tmp_path)
+        train_tmp = tmp_path / "train_zip"
+        test_tmp = tmp_path / "test_zip"
+        xml_tmp = tmp_path / "xml_zip"
+        train_tmp.mkdir(parents=True, exist_ok=True)
+        test_tmp.mkdir(parents=True, exist_ok=True)
+        xml_tmp.mkdir(parents=True, exist_ok=True)
 
-        train_src = next((p for p in [tmp_path / "train_img", tmp_path / "train"] if p.exists()), None)
-        test_src = next((p for p in [tmp_path / "test_img", tmp_path / "test"] if p.exists()), None)
-        xml_src = next((p for p in [tmp_path / "xml", tmp_path / "labels" / "xml"] if p.exists()), None)
+        extract_zip(train_zip, train_tmp)
+        extract_zip(test_zip, test_tmp)
+        extract_zip(xml_zip, xml_tmp)
+
+        train_src = find_dir_with_suffix(train_tmp, [".jpg", ".jpeg", ".png"])
+        test_src = find_dir_with_suffix(test_tmp, [".jpg", ".jpeg", ".png"])
+        xml_src = find_dir_with_suffix(xml_tmp, [".xml"])
 
         if train_src is None or test_src is None or xml_src is None:
             raise FileNotFoundError("CCTSDB 解压结构不符合预期（未找到 train/test/xml）")
