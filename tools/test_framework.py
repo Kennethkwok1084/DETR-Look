@@ -33,11 +33,26 @@ def test_dataloader(config):
         
         print(f"✅ 数据加载成功!")
         print(f"   Batch size: {len(images)}")
-        print(f"   Image shape: {images[0].shape if len(images) > 0 else 'N/A'}")
+        
+        # 适配新的数据集格式：images 可能是 PIL 图像或 tensor
+        if len(images) > 0:
+            first_img = images[0]
+            if hasattr(first_img, 'shape'):  # tensor
+                print(f"   Image shape: {first_img.shape}")
+            elif hasattr(first_img, 'size'):  # PIL Image
+                print(f"   Image size (PIL): {first_img.size}")
+            else:
+                print(f"   Image type: {type(first_img)}")
+        
         print(f"   Target keys: {targets[0].keys() if len(targets) > 0 else 'N/A'}")
         
+        # 适配新的 target 格式：annotations 列表而非 boxes tensor
         if len(targets) > 0:
-            print(f"   第一张图的目标数: {len(targets[0]['boxes'])}")
+            target = targets[0]
+            if 'annotations' in target:
+                print(f"   第一张图的目标数: {len(target['annotations'])}")
+            elif 'boxes' in target:
+                print(f"   第一张图的目标数: {len(target['boxes'])}")
         
         return True
     except Exception as e:

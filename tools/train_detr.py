@@ -311,7 +311,8 @@ def train(config: dict, args):
     val_ann_file = root_dir / config['dataset']['val_ann']
     coco_gt = COCO(val_ann_file)
     
-    best_loss = float('inf')
+    # Resume时恢复best_loss（避免validation跳过时第一个epoch总是覆盖best.pth）
+    best_loss = resume_checkpoint.get('best_loss', float('inf')) if resume_checkpoint else float('inf')
     best_map = 0.0 if best_metric_value is None else best_metric_value
     start_time = time.time()
     
@@ -439,6 +440,7 @@ def train(config: dict, args):
                 scheduler=scheduler,
                 scaler=scaler,
                 best_metric=best_map if best_map > 0 else None,
+                best_loss=best_loss if best_loss < float('inf') else None,
                 save_rng_state=True,
             )
         
@@ -460,6 +462,7 @@ def train(config: dict, args):
                     scheduler=scheduler,
                     scaler=scaler,
                     best_metric=best_map,
+                    best_loss=best_loss if best_loss < float('inf') else None,
                     save_rng_state=True,
                 )
         else:  # 没有验证时使用训练loss
@@ -478,6 +481,7 @@ def train(config: dict, args):
                     scheduler=scheduler,
                     scaler=scaler,
                     best_metric=None,  # 使用loss时不记录best_metric
+                    best_loss=best_loss,
                     save_rng_state=True,
                 )
         
@@ -515,6 +519,7 @@ def train(config: dict, args):
         scheduler=scheduler,
         scaler=scaler,
         best_metric=best_map if best_map > 0 else None,
+        best_loss=best_loss if best_loss < float('inf') else None,
         save_rng_state=True,
     )
     

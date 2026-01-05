@@ -23,6 +23,7 @@ def save_checkpoint(
     scheduler: Optional[torch.optim.lr_scheduler._LRScheduler] = None,
     scaler: Optional[torch.cuda.amp.GradScaler] = None,
     best_metric: Optional[float] = None,
+    best_loss: Optional[float] = None,
     save_rng_state: bool = True,
 ):
     """
@@ -39,7 +40,8 @@ def save_checkpoint(
         is_best: 是否为最佳模型
         scheduler: 学习率调度器（可选）
         scaler: AMP GradScaler（可选）
-        best_metric: 最佳指标值（可选）
+        best_metric: 最佳指标值/mAP（可选）
+        best_loss: 最佳损失值（可选）
         save_rng_state: 是否保存RNG状态（可选但推荐）
     """
     output_dir = Path(output_dir)
@@ -65,6 +67,8 @@ def save_checkpoint(
     # 最佳指标
     if best_metric is not None:
         checkpoint['best_metric'] = best_metric
+    if best_loss is not None:
+        checkpoint['best_loss'] = best_loss
     
     # RNG状态（用于完全可复现）
     if save_rng_state:
@@ -150,10 +154,13 @@ def load_checkpoint(
     epoch = checkpoint.get('epoch', 0)
     step = checkpoint.get('step', 0)
     best_metric = checkpoint.get('best_metric')
+    best_loss = checkpoint.get('best_loss')
     
     print(f"✅ Checkpoint加载成功")
     print(f"   Epoch: {epoch}, Step: {step}")
     if best_metric is not None:
-        print(f"   最佳指标: {best_metric:.4f}")
+        print(f"   最佳指标 (mAP): {best_metric:.4f}")
+    if best_loss is not None:
+        print(f"   最佳损失: {best_loss:.4f}")
     
     return checkpoint
