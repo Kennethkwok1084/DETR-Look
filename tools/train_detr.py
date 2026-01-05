@@ -275,12 +275,13 @@ def train(config: dict, args):
     # Resume 逻辑：从 checkpoint 恢复（已在前面定义 resume_checkpoint）
     start_epoch = 1
     best_metric_value = None
+    loaded_checkpoint = None  # 用于后续访问checkpoint字典
     
     if resume_checkpoint:
         print("\n" + "="*60)
         print(f"🔄 从 checkpoint 恢复训练: {resume_checkpoint}")
         print("="*60)
-        checkpoint = load_checkpoint(
+        loaded_checkpoint = load_checkpoint(
             checkpoint_path=Path(resume_checkpoint),
             model=model,
             optimizer=optimizer,
@@ -289,8 +290,8 @@ def train(config: dict, args):
             device=device,
             restore_rng_state=True,
         )
-        start_epoch = checkpoint.get('epoch', 0) + 1  # 从下一个epoch继续
-        best_metric_value = checkpoint.get('best_metric')
+        start_epoch = loaded_checkpoint.get('epoch', 0) + 1  # 从下一个epoch继续
+        best_metric_value = loaded_checkpoint.get('best_metric')
         print(f"将从 Epoch {start_epoch} 继续训练")
         if best_metric_value is not None:
             print(f"历史最佳指标: {best_metric_value:.4f}")
@@ -312,7 +313,7 @@ def train(config: dict, args):
     coco_gt = COCO(val_ann_file)
     
     # Resume时恢复best_loss（避免validation跳过时第一个epoch总是覆盖best.pth）
-    best_loss = resume_checkpoint.get('best_loss', float('inf')) if resume_checkpoint else float('inf')
+    best_loss = loaded_checkpoint.get('best_loss', float('inf')) if loaded_checkpoint else float('inf')
     best_map = 0.0 if best_metric_value is None else best_metric_value
     start_time = time.time()
     
