@@ -1,0 +1,131 @@
+# DETR 性能测速配置
+# 用于定位训练瓶颈和测量纯训练吞吐量
+
+# 数据集配置
+dataset:
+  name: "bdd100k_traffic_speedcheck"
+  root_dir: "data/traffic_coco/bdd100k_det"
+  train_ann: "annotations/instances_train.json"
+  val_ann: "annotations/instances_val.json"
+  test_ann: "annotations/instances_test.json"
+  num_classes: 3  # vehicle, traffic_sign, traffic_light
+  
+  # 数据增强（关闭所有增强以测量纯训练速度）
+  augmentation:
+    random_horizontal_flip: false
+    random_crop: false
+    color_jitter: false
+    normalize:
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+# 模型配置
+model:
+  name: "detr-resnet-50"
+  backbone: "resnet50"
+  pretrained: true
+  num_queries: 100
+  hidden_dim: 256
+  nheads: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  
+  # 损失权重
+  loss_weights:
+    class_loss_coef: 1.0
+    bbox_loss_coef: 5.0
+    giou_loss_coef: 2.0
+    eos_coef: 0.1
+
+# 训练配置（性能测速专用）
+training:
+  batch_size: 16  # 降低避免OOM（5090 32GB安全值）
+  num_workers: 32  # 极限并行度对抗CPU瓶颈
+  max_epochs: 1  # 只跑1个epoch测速
+  max_iters: 500  # 足够长的迭代数以获得稳定测速
+  
+  # 优化器
+  optimizer:
+    type: "AdamW"
+    lr: 0.00005
+    weight_decay: 0.0001
+    betas: [0.9, 0.999]
+  
+  # 学习率调度
+  lr_scheduler:
+    type: "StepLR"
+    step_size: 500
+    gamma: 0.1
+  
+  # 梯度裁剪
+  clip_max_norm: 0.1
+  
+  # 保存与日志（关闭以测纯训练速度）
+  save_interval: 999  # 不保存checkpoint
+  eval_interval: 999  # 不做验证评估
+  log_interval: 50  # 每50步打印一次
+  
+  # Resume
+  resume: null
+  
+  # AMP（启用混合精度加速）
+  amp: true
+  
+  # torch.compile 优化（PyTorch 2.0+ Transformer加速）
+  compile: false  # DETR动态图不兼容，关闭
+  
+  # 子集采样（2000张图，足够稳定测速）
+  subset_size: 2000
+  subset_seed: 42
+  subset_filter_empty: null
+  
+  # 过拟合模式
+  overfit: false
+  
+  # Progressive Resizing
+  resize_schedule: null
+
+# 验证配置
+validation:
+  batch_size: 2
+  num_workers: 2
+  
+# 测试配置
+testing:
+  batch_size: 1
+  confidence_threshold: 0.7
+  nms_threshold: 0.5
+
+# 输出配置
+output:
+  base_dir: "outputs"
+  experiment_name: "speedcheck"
+  save_best_only: false
+  tensorboard: false
+  
+# 设备配置
+device:
+  type: "cuda"
+  gpu_ids: [0]
+
+# ============================================================
+# 使用说明
+# ============================================================
+# 
+# 性能测速：
+#   python tools/train_detr.py --config configs/detr_speedcheck.yaml
+# 
+# 同时在另一个终端监控GPU：
+#   nvidia-smi -l 1
+# 
+# 观察指标：
+#   - 训练速度 (it/s)：应该达到 5-10+ it/s
+#   - GPU利用率：应该达到 70-95%
+#   - 显存占用：应该接近 20-25GB
+#   - 功耗：应该接近 400-500W
+# 
+# 如果GPU利用率低于50%，说明数据加载是瓶颈
+# 如果显存占用很低，可以继续增大batch_size
+# ============================================================

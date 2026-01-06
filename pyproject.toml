@@ -1,0 +1,13 @@
+[project]
+name = "detr-traffic-analysis"
+version = "0.1.0"
+description = "DETR-based traffic sign and vehicle multi-object detection system"
+readme = "readme.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pycocotools>=2.0.0",
+    "pyyaml>=6.0",
+    "tqdm>=4.60.0",
+    "numpy>=1.20.0",
+    "opencv-python>=4.5.0",
+]

@@ -1,0 +1,139 @@
+# DETR 冒烟测试配置
+# 用于快速验证训练流程（10分钟级）
+
+# 数据集配置
+dataset:
+  name: "bdd100k_traffic_smoke"
+  root_dir: "data/traffic_coco/bdd100k_det"
+  train_ann: "annotations/instances_train.json"
+  val_ann: "annotations/instances_val.json"
+  test_ann: "annotations/instances_test.json"
+  num_classes: 3  # vehicle, traffic_sign, traffic_light
+  
+  # 数据增强
+  augmentation:
+    random_horizontal_flip: false  # 冒烟测试关闭所有增强加速
+    random_crop: false
+    color_jitter: false  # 冒烟测试关闭以加速
+    normalize:
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+# 模型配置
+model:
+  name: "detr-resnet-50"  # Hugging Face模型ID: facebook/detr-resnet-50
+  backbone: "resnet50"
+  pretrained: true  # 使用预训练权重加速收敛
+  num_queries: 100
+  hidden_dim: 256
+  nheads: 8
+  num_encoder_layers: 6
+  num_decoder_layers: 6
+  dim_feedforward: 2048
+  dropout: 0.1
+  
+  # 损失权重
+  loss_weights:
+    class_loss_coef: 1.0
+    bbox_loss_coef: 5.0
+    giou_loss_coef: 2.0
+    eos_coef: 0.1
+
+# 训练配置（冒烟测试专用）
+training:
+  batch_size: 8  # 5090优化配置（32GB显存）
+  num_workers: 12  # 增加数据加载并行度，缓解CPU瓶颈
+  max_epochs: 2  # 只跑2个epoch
+  max_iters: 100  # 每个epoch最多100个iter
+  
+  # 优化器
+  optimizer:
+    type: "AdamW"
+    lr: 0.00005  # 降低学习率防止梯度爆炸
+    weight_decay: 0.0001  # 1e-4
+    betas: [0.9, 0.999]
+  
+  # 学习率调度
+  lr_scheduler:
+    type: "StepLR"
+    step_size: 100
+    gamma: 0.1
+  
+  # 梯度裁剪
+  clip_max_norm: 0.1
+  
+  # 保存与日志
+  save_interval: 1  # 每个epoch都保存
+  eval_interval: 1  # 每个epoch都评估
+  log_interval: 10  # 更频繁的日志
+  
+  # === 训练基本功配置（冒烟测试） ===
+  
+  # Resume
+  resume: null
+  
+  # AMP（冒烟测试启用，加速训练）
+  amp: true
+  
+  # torch.compile 优化
+  compile: false  # 冒烟测试中先关闭，首次编译较慢
+  
+  # 子集采样（100张图快速验证）
+  subset_size: 100
+  subset_seed: 42
+  subset_filter_empty: null  # null=自动（overfit过滤，常规不过滤）
+  
+  # 过拟合模式（设为true可验证小样本过拟合）
+  overfit: false
+  
+  # Progressive Resizing
+  resize_schedule: null
+
+# 验证配置
+validation:
+  batch_size: 2
+  num_workers: 2
+  
+# 测试配置
+testing:
+  batch_size: 1
+  confidence_threshold: 0.7
+  nms_threshold: 0.5
+
+# 输出配置
+output:
+  base_dir: "outputs"
+  experiment_name: "smoke_test"
+  save_best_only: false
+  tensorboard: false  # 冒烟测试关闭tensorboard
+  
+# 设备配置
+device:
+  type: "cuda"  # cuda or cpu
+  gpu_ids: [0]
+
+# ============================================================
+# 使用说明
+# ============================================================
+# 
+# 1. 基础冒烟测试（100张图 × 2 epoch）:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml
+# 
+# 2. 更快的冒烟（仅200次迭代）:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml --max-iter 200
+# 
+# 3. 小样本过拟合测试（10张图）:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml \
+#      --subset-size 10 --overfit
+# 
+# 4. 验证AMP:
+#    修改配置: amp: true
+#    python tools/train_detr.py --config configs/detr_smoke.yaml
+# 
+# 5. 验证Resume:
+#    第一次运行后，使用:
+#    python tools/train_detr.py --config configs/detr_smoke.yaml \
+#      --resume outputs/smoke_test/checkpoint_epoch_1.pth
+# 
+# ============================================================
+
