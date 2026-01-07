@@ -125,8 +125,19 @@ class CocoDetrDataset(torch.utils.data.Dataset):
         img_info = self.coco.loadImgs(img_id)[0]
         img_path = self.root / img_info["file_name"]
 
-        # C++ 解码（黑名单已过滤损坏图像）
-        img = read_image(str(img_path), mode=ImageReadMode.RGB).float() / 255.0
+        # C++ 解码（黑名单过滤 + 后备跳过）
+        try:
+            img = read_image(str(img_path), mode=ImageReadMode.RGB).float() / 255.0
+        except Exception as e:
+            # 损坏图像后备处理（黑名单缺失/不完整时）
+            print(f"\n⚠️  跳过损坏图像: {img_path} ({e})")
+            print(f"   建议运行: python tools/scan_corrupted_images.py --ann {self.coco.dataset.get('info', {}).get('description', 'annotation')} --img-dir {self.root}\n")
+            # 跳过到下一个（避免无限递归）
+            if idx + 1 < len(self):
+                return self.__getitem__(idx + 1)
+            else:
+                # 最后一张图损坏，返回第一张
+                return self.__getitem__(0)
         
         # DETR 标准归一化（ImageNet）
         for c in range(3):
@@ -435,6 +446,21 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, use_amp, amp_d
             print(f"  ⏱️  t_load: {avg_t_load:.3f}s ({pct_load:.1f}%) | t_step: {avg_t_step:.3f}s ({pct_step:.1f}%)")
         
         t_batch_start = time.time()
+    
+    # 刷新残留梯度（当batch数不能被grad_accum整除时）
+    if grad_accum > 1 and len(data_loader) % grad_accum != 0:
+        if scaler is not None:
+            if clip_max_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            if clip_max_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
+            optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+        print(f"  🔄 刷新残留梯度（{len(data_loader)} % {grad_accum} = {len(data_loader) % grad_accum} 个 batch）")
     
     return {"loss": total_loss / len(data_loader)}
 
