@@ -1,0 +1,272 @@
+# Torchvision DETR 实现总结
+
+## 📋 已完成工作
+
+### 1. 核心训练脚本
+**文件**: `tools/train_detr_torchvision.py`
+
+**功能**:
+- ✅ 完整训练循环（train + eval）
+- ✅ Checkpoint 保存/恢复（model + optimizer 状态）
+- ✅ AMP 混合精度训练
+- ✅ COCO 评估（mAP/AP_small 等指标）
+- ✅ 日志记录（JSON 格式）
+- ✅ 支持数据子集（调试用）
+
+**关键优化**:
+```python
+# C++ 图像解码
+from torchvision.io import read_image
+img = read_image(str(img_path), mode=ImageReadMode.RGB).float() / 255.0
+
+# 优化的 DataLoader
+loader = DataLoader(
+    dataset,
+    batch_size=16,
+    num_workers=12,          # 5090 调优
+    prefetch_factor=2,       # 预取 2 批次
+    pin_memory=True,         # 锁页内存
+    persistent_workers=True, # 复用 worker
+)
+
+# non_blocking 传输
+images = [img.to(device, non_blocking=True) for img in images]
+
+# 性能优化
+torch.backends.cudnn.benchmark = True
+torch.set_float32_matmul_precision("high")  # PyTorch 2.0+
+```
+
+### 2. 配置文件
+**文件**: `configs/detr_torchvision.yaml`
+
+**内容**:
+- 数据集路径配置
+- 模型参数（num_classes, pretrained_backbone）
+- 图像尺寸（min_size=800, max_size=1333）
+- 训练超参数（lr, batch_size, epochs）
+- DataLoader 优化参数
+- 性能优化开关
+
+### 3. 冒烟测试脚本
+**文件**: `tools/smoke_test_torchvision.py`
+
+**功能**:
+- ✅ 10 步训练验证链路
+- ✅ Checkpoint 保存/加载测试
+- ✅ 推理模式测试
+- ✅ Loss 趋势检查
+
+**用法**:
+```bash
+python tools/smoke_test_torchvision.py \
+  --train-img data/traffic_coco/bdd100k_det/images/train \
+  --train-ann data/traffic_coco/bdd100k_det/annotations/instances_train.json
+```
+
+### 4. 数据加载性能测试
+**文件**: `tools/benchmark_dataloader.py`
+
+**功能**:
+- ✅ 测试 DataLoader 吞吐量
+- ✅ 验证数据格式正确性
+- ✅ 对比不同 workers/prefetch_factor 配置
+
+**用法**:
+```bash
+python tools/benchmark_dataloader.py \
+  --batch-size 16 --num-workers 12 --prefetch-factor 2
+```
+
+### 5. 一键启动脚本
+**文件**: `tools/run_torchvision_training.sh`
+
+**功能**:
+- ✅ 交互式选择训练模式
+- ✅ 自动检查虚拟环境
+- ✅ 数据集完整性检查
+- ✅ 三种预设模式（冒烟/快速/完整）
+
+**用法**:
+```bash
+./tools/run_torchvision_training.sh
+# 选择模式 1/2/3
+```
+
+### 6. 开发文档
+**文件**: `docs/TORCHVISION_DETR_GUIDE.md`
+
+**内容**:
+- 改进要点说明
+- 快速开始指南
+- 参数说明
+- 输出结构
+- 性能预期
+- 调试建议
+- 常见问题
+
+## 🎯 设计目标达成情况
+
+### ✅ 已实现
+1. **C++ 图像解码**: 使用 `torchvision.io.read_image` 替代 PIL
+2. **DataLoader 优化**: workers=12, prefetch=2, pin_memory, persistent_workers
+3. **训练加速**: non_blocking, cudnn.benchmark, matmul_precision
+4. **标签映射**: COCO category_id → 连续 [0..N-1]
+5. **分辨率保持**: min_size=800, max_size=1333（保持纵横比）
+6. **完整训练功能**: checkpoint, resume, eval, logging
+7. **AMP 支持**: bf16/fp16 混合精度
+
+### 📊 性能预期（RTX 5090）
+- **原实现**: 2.48 it/s（PIL + HF Processor）
+- **目标**: 3-4 it/s
+- **优化幅度**: ~30-50% 提升
+
+### 🔄 对比 develop.md § 3.11
+完全符合 develop.md 中的改进要求：
+- ✅ 切换到 torchvision DETR
+- ✅ 保持分辨率/精度
+- ✅ C++ 解码优化
+- ✅ DataLoader 调优
+- ✅ 支持 checkpoint/eval
+
+## 📁 文件清单
+
+```
+detr_traffic_analysis/
+├── tools/
+│   ├── train_detr_torchvision.py          # 主训练脚本
+│   ├── smoke_test_torchvision.py          # 冒烟测试
+│   ├── benchmark_dataloader.py            # DataLoader 性能测试
+│   └── run_torchvision_training.sh        # 一键启动脚本
+├── configs/
+│   └── detr_torchvision.yaml              # 训练配置
+└── docs/
+    ├── TORCHVISION_DETR_GUIDE.md          # 开发文档
+    └── TORCHVISION_DETR_SUMMARY.md        # 本文件
+```
+
+## 🚀 快速开始（3 步）
+
+### 步骤 1: 冒烟测试
+```bash
+python tools/smoke_test_torchvision.py
+```
+**验证**: 链路正常，loss 下降
+
+### 步骤 2: DataLoader 性能测试
+```bash
+python tools/benchmark_dataloader.py --num-workers 12
+```
+**验证**: 吞吐量符合预期
+
+### 步骤 3: 快速训练（子集）
+```bash
+python tools/train_detr_torchvision.py \
+  --train-img data/traffic_coco/bdd100k_det/images/train \
+  --train-ann data/traffic_coco/bdd100k_det/annotations/instances_train.json \
+  --val-img data/traffic_coco/bdd100k_det/images/val \
+  --val-ann data/traffic_coco/bdd100k_det/annotations/instances_val.json \
+  --subset 2000 --num-epochs 10 --amp --pretrained-backbone
+```
+**验证**: it/s 达到 3-4，mAP 正常
+
+## 📈 后续工作
+
+### 优先级 P0（核心功能）
+- [ ] 完整训练验证（全部数据）
+- [ ] 性能对比报告（vs 原实现）
+- [ ] mAP/AP_small 指标验证
+
+### 优先级 P1（增强功能）
+- [ ] 学习率调度器（Cosine/Step）
+- [ ] Gradient clipping
+- [ ] 多尺度训练（数据增强）
+- [ ] EMA（Exponential Moving Average）
+
+### 优先级 P2（高级优化）
+- [ ] DDP 多卡训练
+- [ ] 编译加速（torch.compile）
+- [ ] 数据格式优化（FFCV/LMDB）
+
+## 🐛 已知问题 & 解决方案
+
+### 问题 1: 类别映射
+**现象**: COCO category_id 不连续  
+**解决**: 在 Dataset 中建立 `cat_id_map` 映射到 [0..N-1]
+
+### 问题 2: Resize 策略
+**现象**: torchvision DETR 需要特定 resize 逻辑  
+**解决**: 实现 `_resize()` 方法，保持纵横比
+
+### 问题 3: Target 格式
+**现象**: torchvision DETR 需要字典格式 target  
+**解决**: 返回 `{"boxes", "labels", "image_id", "area", "iscrowd"}`
+
+## 📊 性能调优建议
+
+### DataLoader 参数
+| 参数 | RTX 5090 | RTX 3090 | 说明 |
+|------|----------|----------|------|
+| num_workers | 12-16 | 8-12 | CPU 核心数相关 |
+| prefetch_factor | 2-4 | 2-3 | 内存消耗换速度 |
+| batch_size | 16-24 | 8-16 | 显存限制 |
+
+### 训练策略
+- **AMP**: 必开（bf16 优先）
+- **cudnn.benchmark**: 必开
+- **persistent_workers**: 必开（workers > 0）
+- **pin_memory**: 必开
+
+## 📝 代码示例
+
+### 完整训练命令
+```bash
+python tools/train_detr_torchvision.py \
+  --train-img data/traffic_coco/bdd100k_det/images/train \
+  --train-ann data/traffic_coco/bdd100k_det/annotations/instances_train.json \
+  --val-img data/traffic_coco/bdd100k_det/images/val \
+  --val-ann data/traffic_coco/bdd100k_det/annotations/instances_val.json \
+  --num-classes 3 \
+  --batch-size 16 \
+  --num-workers 12 \
+  --prefetch-factor 2 \
+  --min-size 800 \
+  --max-size 1333 \
+  --num-epochs 50 \
+  --lr 5e-5 \
+  --weight-decay 1e-4 \
+  --eval-interval 5 \
+  --amp \
+  --pretrained-backbone \
+  --output-dir outputs/detr_torchvision_full
+```
+
+### 恢复训练
+```bash
+python tools/train_detr_torchvision.py \
+  [... 同上参数 ...] \
+  --resume outputs/detr_torchvision_full/last.pth
+```
+
+### 仅评估
+```bash
+# 使用训练脚本的 epoch 0（跳过训练）
+python tools/train_detr_torchvision.py \
+  --val-img data/traffic_coco/bdd100k_det/images/val \
+  --val-ann data/traffic_coco/bdd100k_det/annotations/instances_val.json \
+  --num-classes 3 \
+  --num-epochs 0 \
+  --resume outputs/detr_torchvision_full/best.pth
+```
+
+## 🔗 相关文档
+
+- [develop.md](develop.md) § 3.11 - 性能瓶颈与切换记录
+- [TORCHVISION_DETR_GUIDE.md](TORCHVISION_DETR_GUIDE.md) - 完整开发指南
+- [torchvision DETR 文档](https://pytorch.org/vision/stable/models/detr.html)
+
+---
+
+**版本**: v1.0  
+**日期**: 2026-01-06  
+**维护者**: GitHub Copilot

@@ -1,0 +1,214 @@
+# Torchvision DETR 训练指南
+
+## 目标
+在保持分辨率/精度（min_size=800, max_size=1333）前提下，将训练吞吐提升到 3-4 it/s
+
+## 改进要点
+
+### 1. 图像解码优化
+- ✅ 使用 `torchvision.io.read_image`（C++ 解码）替代 PIL
+- ✅ 直接返回 Tensor，避免 PIL → numpy → Tensor 转换
+
+### 2. 数据加载优化
+- ✅ `num_workers=12`（5090 建议 8-16）
+- ✅ `prefetch_factor=2`（预取 2-4 批次）
+- ✅ `pin_memory=True`（锁页内存）
+- ✅ `persistent_workers=True`（复用 worker 进程）
+
+### 3. 训练加速
+- ✅ `non_blocking=True`（异步 GPU 传输）
+- ✅ `torch.backends.cudnn.benchmark = True`
+- ✅ `torch.set_float32_matmul_precision("high")`（PyTorch 2.0+）
+- ✅ AMP 混合精度（bf16 优先）
+
+### 4. 标签映射
+- ✅ COCO category_id 映射到连续 [0..N-1]
+- ✅ torchvision DETR 的 no-object 在 num_classes 索引
+
+## 文件说明
+
+### 核心文件
+- `tools/train_detr_torchvision.py` - 完整训练脚本（支持 checkpoint/eval/AMP）
+- `configs/detr_torchvision.yaml` - 训练配置文件
+- `tools/smoke_test_torchvision.py` - 冒烟测试脚本
+- `tools/run_torchvision_training.sh` - 一键启动脚本
+
+## 快速开始
+
+### 方式 1: 使用启动脚本（推荐）
+
+```bash
+# 激活环境
+source .venv/bin/activate
+
+# 运行脚本（交互式选择模式）
+./tools/run_torchvision_training.sh
+```
+
+提供三种模式：
+1. 冒烟测试（10步验证链路）
+2. 快速训练（子集2000张，验证吞吐）
+3. 完整训练（全部数据，50 epochs）
+
+### 方式 2: 直接运行
+
+#### 冒烟测试（验证链路）
+
+```bash
+python tools/smoke_test_torchvision.py \
+  --train-img data/traffic_coco/bdd100k_det/images/train \
+  --train-ann data/traffic_coco/bdd100k_det/annotations/instances_train.json \
+  --batch-size 4 --max-iters 10
+```
+
+#### 快速训练（子集验证吞吐）
+
+```bash
+python tools/train_detr_torchvision.py \
+  --train-img data/traffic_coco/bdd100k_det/images/train \
+  --train-ann data/traffic_coco/bdd100k_det/annotations/instances_train.json \
+  --val-img data/traffic_coco/bdd100k_det/images/val \
+  --val-ann data/traffic_coco/bdd100k_det/annotations/instances_val.json \
+  --num-classes 3 \
+  --batch-size 16 --num-workers 12 --prefetch-factor 2 \
+  --min-size 800 --max-size 1333 \
+  --subset 2000 --num-epochs 10 --eval-interval 2 \
+  --amp --pretrained-backbone \
+  --output-dir outputs/detr_torchvision_fast
+```
+
+#### 完整训练
+
+```bash
+python tools/train_detr_torchvision.py \
+  --train-img data/traffic_coco/bdd100k_det/images/train \
+  --train-ann data/traffic_coco/bdd100k_det/annotations/instances_train.json \
+  --val-img data/traffic_coco/bdd100k_det/images/val \
+  --val-ann data/traffic_coco/bdd100k_det/annotations/instances_val.json \
+  --num-classes 3 \
+  --batch-size 16 --num-workers 12 --prefetch-factor 2 \
+  --min-size 800 --max-size 1333 \
+  --num-epochs 50 --eval-interval 5 \
+  --amp --pretrained-backbone \
+  --output-dir outputs/detr_torchvision_full
+```
+
+## 参数说明
+
+### 必需参数
+- `--train-img`: 训练图像目录
+- `--train-ann`: 训练标注文件（COCO JSON）
+- `--num-classes`: 类别数（默认 3）
+
+### 可选参数
+- `--val-img/--val-ann`: 验证集路径（启用评估）
+- `--batch-size`: Batch size（默认 16）
+- `--num-workers`: DataLoader workers（默认 12）
+- `--prefetch-factor`: 预取因子（默认 2）
+- `--min-size/--max-size`: 图像尺寸（默认 800/1333）
+- `--amp`: 启用混合精度
+- `--pretrained-backbone`: 使用 ImageNet 预训练骨干
+- `--subset`: 使用数据子集（调试用）
+- `--resume`: 恢复训练的 checkpoint 路径
+- `--output-dir`: 输出目录
+- `--eval-interval`: 评估间隔（epoch）
+
+## 输出结构
+
+```
+outputs/detr_torchvision_*/
+├── config.json          # 训练配置快照
+├── metrics.json         # 训练日志（每 epoch）
+├── last.pth             # 最新 checkpoint
+└── best.pth             # 最佳模型（按 mAP）
+```
+
+## Checkpoint 格式
+
+```python
+checkpoint = {
+    "model": model.state_dict(),
+    "optimizer": optimizer.state_dict(),
+    "epoch": epoch,
+    "iteration": iteration,
+    "best_map": best_map,
+}
+```
+
+## 性能预期（RTX 5090）
+
+### 目标吞吐
+- **目标**: 3-4 it/s（batch_size=16）
+- **对比**: 原实现 2.48 it/s（PIL + HF Processor）
+
+### 优化效果
+- C++ 图像解码：~30% 加速
+- DataLoader 调优：~20% 加速
+- 总体预期：3.0-3.5 it/s
+
+## 调试建议
+
+### 1. 吞吐低于预期
+- 检查 GPU 利用率：`nvidia-smi dmon -s u`
+- 调整 workers：8/12/16 测试
+- 调整 prefetch_factor：2/3/4 测试
+- 确认 cudnn.benchmark 已启用
+
+### 2. 显存不足
+- 降低 batch_size：16 → 12 → 8
+- 降低 workers：12 → 8
+- 关闭 persistent_workers
+
+### 3. Loss 异常
+- 检查类别映射是否正确
+- 检查 bbox 坐标格式（xyxy）
+- 验证数据增强参数
+
+## 与 develop.md 对照
+
+本实现完全遵循 develop.md § 3.11 的改进要点：
+
+✅ 切换到 torchvision DETR  
+✅ 保持 min_size=800, max_size=1333  
+✅ 使用 C++ 图像解码  
+✅ 优化 DataLoader 参数  
+✅ non_blocking 传输 + CUDA 优化  
+✅ 支持 AMP/checkpoint/评估  
+
+## 后续优化方向
+
+### 短期（当前实现范围）
+- [x] C++ 图像解码
+- [x] DataLoader 参数调优
+- [x] 完整训练/评估/checkpoint
+
+### 中期（扩展功能）
+- [ ] 学习率调度器（Cosine/Step）
+- [ ] 多尺度训练（数据增强）
+- [ ] Gradient clipping
+- [ ] EMA（Exponential Moving Average）
+
+### 长期（性能极限）
+- [ ] 数据格式优化（FFCV/WebDataset/LMDB）
+- [ ] DDP 多卡训练
+- [ ] 编译加速（torch.compile）
+
+## 常见问题
+
+### Q: 为什么不用 HF Transformers 的 DETR？
+A: HF 的 DetrImageProcessor 预处理开销大，torchvision 实现更轻量且与 PyTorch 生态集成更好。
+
+### Q: 可以用自定义 backbone 吗？
+A: 当前使用 torchvision.models.detection.detr_resnet50，若需自定义可参考其源码修改。
+
+### Q: 如何继续训练？
+A: 使用 `--resume outputs/xxx/last.pth` 恢复训练。
+
+### Q: 评估指标在哪里？
+A: 在 `outputs/*/metrics.json` 中，包含每个 epoch 的 mAP/AP_small 等。
+
+---
+
+**版本**: v1.0  
+**日期**: 2026-01-06  
+**对应**: develop.md § 3.11
