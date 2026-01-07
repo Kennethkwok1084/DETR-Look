@@ -36,10 +36,27 @@ class CocoDetrDataset(torch.utils.data.Dataset):
         min_size: int = 800,
         max_size: int = 1333,
         is_train: bool = True,
+        blacklist_file: str = None,
     ):
         self.root = Path(img_root)
         self.coco = COCO(str(ann_file))
         self.ids = list(sorted(self.coco.imgs.keys()))
+        
+        # 加载黑名单并过滤
+        if blacklist_file and Path(blacklist_file).exists():
+            with open(blacklist_file) as f:
+                blacklist_data = json.load(f)
+            corrupted_paths = {item["path"] for item in blacklist_data.get("corrupted_images", [])}
+            
+            # 过滤损坏图像
+            original_count = len(self.ids)
+            self.ids = [
+                img_id for img_id in self.ids
+                if str(self.root / self.coco.loadImgs(img_id)[0]["file_name"]) not in corrupted_paths
+            ]
+            filtered_count = original_count - len(self.ids)
+            if filtered_count > 0:
+                print(f"📋 黑名单过滤: {filtered_count} 张损坏图像已跳过")
         
         # 类别映射到连续 [0..N-1]
         cat_ids = sorted(self.coco.getCatIds())
@@ -108,13 +125,8 @@ class CocoDetrDataset(torch.utils.data.Dataset):
         img_info = self.coco.loadImgs(img_id)[0]
         img_path = self.root / img_info["file_name"]
 
-        # C++ 解码（捕获损坏图像）
-        try:
-            img = read_image(str(img_path), mode=ImageReadMode.RGB).float() / 255.0
-        except Exception as e:
-            # 损坏图像：返回下一个
-            print(f"⚠️  跳过损坏图像: {img_path} ({e})")
-            return self.__getitem__((idx + 1) % len(self))
+        # C++ 解码（黑名单已过滤损坏图像）
+        img = read_image(str(img_path), mode=ImageReadMode.RGB).float() / 255.0
         
         # DETR 标准归一化（ImageNet）
         for c in range(3):
@@ -329,8 +341,14 @@ def evaluate(model, data_loader, device, coco_gt, reverse_cat_id_map=None, proce
         model.train()
 
 
-def train_one_epoch(model, optimizer, data_loader, device, epoch, use_amp, amp_dtype, scaler=None, print_freq=50):
-    """训练一个 epoch"""
+def train_one_epoch(model, optimizer, data_loader, device, epoch, use_amp, amp_dtype, 
+                    scaler=None, print_freq=50, grad_accum=1, clip_max_norm=None):
+    """训练一个 epoch
+    
+    Args:
+        grad_accum: 梯度累积步数（有效batch = batch_size * grad_accum）
+        clip_max_norm: 梯度裁剪最大范数（None=不裁剪）
+    """
     model.train()
     total_loss = 0.0
     start_time = time.time()
@@ -358,21 +376,41 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, use_amp, amp_d
                 "boxes": target["boxes"].to(device, non_blocking=True),  # 归一化 cxcywh
             })
         
-        optimizer.zero_grad(set_to_none=True)
-        
         with torch.autocast(device_type=device.type, dtype=amp_dtype, enabled=use_amp):
             outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=batch_labels)
             loss = outputs.loss
+            
+            # 梯度累积：loss缩放，防止累积后梯度放大
+            if grad_accum > 1:
+                loss = loss / grad_accum
         
         if scaler is not None:
             scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
+            
+            # 梯度累积：每grad_accum步更新一次
+            if step % grad_accum == 0:
+                # 梯度裁剪（在unscale后、step前）
+                if clip_max_norm is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
+                
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad(set_to_none=True)
         else:
             loss.backward()
-            optimizer.step()
+            
+            # 梯度累积：每grad_accum步更新一次
+            if step % grad_accum == 0:
+                # 梯度裁剪
+                if clip_max_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), clip_max_norm)
+                
+                optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
         
-        total_loss += loss.item()
+        # 记录原始loss（未缩放）
+        total_loss += loss.item() * (grad_accum if grad_accum > 1 else 1)
         
         # 训练计算耗时
         torch.cuda.synchronize() if device.type == "cuda" else None
@@ -390,8 +428,10 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, use_amp, amp_d
             pct_load = 100.0 * total_t_load / elapsed
             pct_step = 100.0 * total_t_step / elapsed
             
+            # 显示实际loss值（已还原）
+            actual_loss = loss.item() * (grad_accum if grad_accum > 1 else 1)
             print(f"Epoch [{epoch}] Step [{step}/{len(data_loader)}] "
-                  f"Loss: {loss.item():.4f} (avg: {avg_loss:.4f}) | Speed: {it_s:.2f} it/s")
+                  f"Loss: {actual_loss:.4f} (avg: {avg_loss:.4f}) | Speed: {it_s:.2f} it/s")
             print(f"  ⏱️  t_load: {avg_t_load:.3f}s ({pct_load:.1f}%) | t_step: {avg_t_step:.3f}s ({pct_step:.1f}%)")
         
         t_batch_start = time.time()
@@ -425,6 +465,9 @@ def main():
     parser.add_argument("--score-threshold", type=float, default=0.05, help="评估时的置信度阈值")
     parser.add_argument("--offline", action="store_true", help="离线模式，不下载预训练模型")
     parser.add_argument("--no-eval", action="store_true", help="跳过评估（离线无缓存时自动跳过）")
+    parser.add_argument("--blacklist", help="损坏图像黑名单文件")
+    parser.add_argument("--grad-accum", type=int, default=1, help="梯度累积步数（有效batch=batch_size*grad_accum）")
+    parser.add_argument("--clip-max-norm", type=float, help="梯度裁剪最大范数（推荐0.1，None=不裁剪）")
     
     args = parser.parse_args()
     
@@ -444,10 +487,21 @@ def main():
     print(f"设备: {device}")
     print(f"Batch Size: {args.batch_size} | Workers: {args.num_workers}")
     print(f"图像尺寸: min={args.min_size}, max={args.max_size}")
+    
+    # 梯度累积和裁剪信息
+    if args.grad_accum > 1:
+        effective_batch = args.batch_size * args.grad_accum
+        print(f"梯度累积: {args.grad_accum} 步 | 有效Batch: {effective_batch}")
+    if args.clip_max_norm is not None:
+        print(f"梯度裁剪: clip_max_norm={args.clip_max_norm}")
+    
     print("=" * 80)
     
     # 数据集
-    train_dataset = CocoDetrDataset(args.train_img, args.train_ann, args.min_size, args.max_size)
+    train_dataset = CocoDetrDataset(
+        args.train_img, args.train_ann, args.min_size, args.max_size, 
+        blacklist_file=args.blacklist
+    )
     
     # 自动推断类别数（从数据集）
     actual_num_classes = train_dataset.num_classes
@@ -563,7 +617,9 @@ def main():
         
         train_metrics = train_one_epoch(
             model, optimizer, train_loader, device, epoch + 1,
-            use_amp, amp_dtype, scaler, args.print_freq
+            use_amp, amp_dtype, scaler, args.print_freq,
+            grad_accum=args.grad_accum,
+            clip_max_norm=args.clip_max_norm
         )
         
         epoch_time = time.time() - epoch_start
