@@ -1202,6 +1202,35 @@ python tools/convert_to_coco.py \
 
 ---
 
+### 3.11 性能瓶颈与官方 DETR (torchvision) 切换记录（5090）
+
+**背景与现象**：
+- 设备：RTX 5090 32GB，AMP 开启
+- 配置：`configs/detr_speedcheck.yaml`（batch=16, workers=32, subset=2000, eval/save 关闭）
+- 结果：最快 2.48 it/s，最佳 Loss 2.4913
+- 资源：GPU 利用率 70-80%，功耗 400+/575W；CPU 利用率 70-80%
+
+**结论**：
+- 训练吞吐受“CPU 预处理 + GPU 计算”双瓶颈影响
+- PIL + DetrImageProcessor 预处理成本高，DataLoader 过大并行导致争用
+- 纯 I/O 不是首要瓶颈（本地 NVMe 条件下）
+
+**改进决策**：
+1. 官方实现切换至 torchvision DETR（保留 facebookresearch 作为对照基线）
+2. 保持分辨率与精度目标一致（默认 min_size=800, max_size=1333）
+3. 通过数据管道优化拉升 it/s（不牺牲精度）
+
+**改进要点**：
+- 图像读取：使用 `torchvision.io.read_image`（C++ 解码）替代 PIL
+- 标签映射：COCO category_id 统一映射到连续 [0..N-1]（DETR 使用 num_classes + 1 作为 no-object）
+- DataLoader：workers 调整到 8-16，prefetch_factor 2-4，保持 pin_memory/persistent_workers
+- 训练加速：non_blocking 传输 + CUDA prefetcher；开启 cudnn.benchmark 与 matmul_precision("high")
+- 语言重构：Rust/Go 重写文件 I/O 收益有限，优先考虑数据格式化（FFCV/WebDataset/LMDB）
+
+**目标**：
+- 在保持分辨率/精度前提下，将训练吞吐提升到 3-4 it/s
+
+
 ## 4. 检测模型与小目标优化
 
 本节对应论文中“基于 Deformable DETR 的检测模型设计与小目标优化”部分。

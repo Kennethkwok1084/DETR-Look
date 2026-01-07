@@ -74,23 +74,24 @@ def verify_requirements():
 def verify_imports():
     """验证关键导入"""
     print("="*60)
-    print("3. 验证关键导入")
+    print("3. 验证关键导入（train_detr_optimized.py）")
     print("="*60)
     
-    # 检查train_detr.py的导入
-    train_script = project_root / 'tools' / 'train_detr.py'
+    # 检查 train_detr_optimized.py 的导入和关键特性
+    train_script = project_root / 'tools' / 'train_detr_optimized.py'
     with open(train_script) as f:
         content = f.read()
     
     checks = [
         ('from pycocotools.coco import COCO', 'COCO导入'),
-        ('from tools.eval_detr import evaluate', 'evaluate函数导入'),
-        ('from transformers import DetrImageProcessor', 'DetrImageProcessor导入'),
-        ('eval_interval', 'eval_interval配置'),
-        ('coco_gt = COCO(val_ann_file)', 'COCO GT加载'),
-        ('val_metrics = evaluate(', '验证调用'),
-        ("config['dataset']['val_ann']", '正确的配置键名val_ann'),
-        ('image_processor = DetrImageProcessor', 'ImageProcessor初始化'),
+        ('from transformers import', 'transformers导入'),
+        ('DetrForObjectDetection', 'DetrForObjectDetection'),
+        ('DETR_MEAN = [0.485, 0.456, 0.406]', 'DETR归一化均值'),
+        ('DETR_STD = [0.229, 0.224, 0.225]', 'DETR归一化标准差'),
+        ('reverse_cat_id_map', 'Category ID反向映射'),
+        ('target_sizes = torch.stack([l["orig_size"]', '使用orig_size作为target_sizes'),
+        ('def collate_fn(batch)', 'collate_fn返回dict'),
+        ('torchvision.io', 'torchvision.io导入'),
     ]
     
     for check_str, desc in checks:
@@ -107,47 +108,56 @@ def verify_imports():
 def verify_collate_fn():
     """验证collate_fn处理可变尺寸"""
     print("="*60)
-    print("4. 验证数据加载")
+    print("4. 验证数据加载（dict格式）")
     print("="*60)
     
-    dataset_file = project_root / 'dataset' / 'coco_dataset.py'
-    with open(dataset_file) as f:
+    train_script = project_root / 'tools' / 'train_detr_optimized.py'
+    with open(train_script) as f:
         content = f.read()
     
-    if 'def collate_fn(batch' in content and 'return list(images), list(targets)' in content:
-        print("✓ collate_fn 返回列表（支持可变尺寸）")
-    else:
-        print("❌ collate_fn实现有问题")
-        return False
+    checks = [
+        ('def collate_fn(batch', 'collate_fn定义'),
+        ('"pixel_values"', 'pixel_values键'),
+        ('"labels"', 'labels键'),
+        ('class_labels', 'class_labels字段'),
+    ]
+    
+    for check_str, desc in checks:
+        if check_str in content:
+            print(f"✓ {desc}")
+        else:
+            print(f"❌ 缺少 {desc}")
+            return False
     
     print("\n✅ 数据加载验证通过!\n")
     return True
 
 
 def verify_stack_handling():
-    """验证可变尺寸图像处理（使用DetrImageProcessor）"""
+    """验证Bbox格式和坐标系"""
     print("="*60)
-    print("5. 验证可变尺寸图像处理")
+    print("5. 验证Bbox格式和坐标系")
     print("="*60)
     
-    files_to_check = [
-        ('tools/train_detr.py', 'train_detr.py'),
-        ('tools/eval_detr.py', 'eval_detr.py'),
+    train_script = project_root / 'tools' / 'train_detr_optimized.py'
+    with open(train_script) as f:
+        content = f.read()
+    
+    checks = [
+        ('# 转换 bbox：xyxy 像素 -> 归一化 cxcywh', 'Bbox转换注释'),
+        ('boxes_cxcywh', '归一化中心点计算'),
+        ('target_sizes = torch.stack([l["orig_size"]', 'evaluate使用orig_size'),
+        ('reverse_cat_id_map.get(label.item()', 'Category ID反向映射'),
     ]
     
-    for file_path, name in files_to_check:
-        full_path = project_root / file_path
-        with open(full_path) as f:
-            content = f.read()
-        
-        # 检查使用DetrImageProcessor而非torch.stack
-        if 'DetrImageProcessor' in content and 'pixel_values' in content and 'pixel_mask' in content:
-            print(f"✓ {name} 使用 DetrImageProcessor 处理可变尺寸")
+    for check_str, desc in checks:
+        if check_str in content:
+            print(f"✓ {desc}")
         else:
-            print(f"❌ {name} 未正确使用 DetrImageProcessor")
+            print(f"❌ 缺少 {desc}")
             return False
     
-    print("\n✅ 可变尺寸处理验证通过!\n")
+    print("\n✅ Bbox格式和坐标系验证通过!\n")
     return True
 
 

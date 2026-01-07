@@ -1,0 +1,84 @@
+# DETR 训练配置（实际使用 transformers DETR）
+# 注意：当前环境 torchvision 0.24.1+cpu 不包含 DETR
+# 使用 train_detr_optimized.py 训练
+
+# 数据集配置
+dataset:
+  name: bdd100k
+  root: data/traffic_coco/bdd100k_det
+  num_classes: 3  # vehicle, traffic_sign, traffic_light
+  # 注意：COCO category_id 不保证连续，已在 Dataset 中映射到 [0..N-1]
+  splits:
+    train:
+      img_dir: images/train
+      ann_file: annotations/instances_train.json
+    val:
+      img_dir: images/val
+      ann_file: annotations/instances_val.json
+
+# 模型配置
+model:
+  name: detr_resnet50  # transformers: DetrForObjectDetection
+  num_classes: 3
+  pretrained: true  # 使用 facebook/detr-resnet-50 预训练权重
+
+# 图像预处理
+image:
+  min_size: 800      # 最小边尺寸
+  max_size: 1333     # 最大边尺寸（保持纵横比）
+
+# 训练配置
+training:
+  # 基础参数
+  batch_size: 16
+  num_epochs: 50
+  base_lr: 5.0e-5
+  weight_decay: 1.0e-4
+  
+  # 优化器
+  optimizer: adamw
+  
+  # DataLoader 优化（5090 调优）
+  num_workers: 12
+  prefetch_factor: 2
+  pin_memory: true
+  persistent_workers: true
+  
+  # 混合精度
+  amp: true
+  
+  # Checkpoint
+  eval_interval: 5      # 每 N 个 epoch 评估一次
+  save_interval: 5      # 每 N 个 epoch 保存一次
+  print_freq: 50        # 每 N 个 step 打印一次
+  
+  # 调试选项
+  subset: null          # 使用数据子集（null=全部数据）
+  max_iters: null       # 最大迭代次数（null=不限制）
+
+# 输出配置
+output:
+  base_dir: outputs/detr_torchvision
+  save_best: true
+  save_last: true
+  metrics_format: json  # json 或 csv
+
+# 性能优化（自动启用）
+performance:
+  cudnn_benchmark: true
+  matmul_precision: high  # PyTorch 2.0+
+  non_blocking_transfer: true
+
+# 备注
+notes: |
+  ⚠️ 当前配置对应 train_detr_optimized.py（transformers DETR）
+  - torchvision 0.24.1+cpu 不包含 DETR 模型
+  - 等 CUDA 环境就绪且 torchvision 包含 DETR 后切换到纯 torchvision 实现
+  - COCO category_id 已在 Dataset 中映射到连续 [0..N-1]
+  - 图像归一化：DETR 标准（ImageNet mean/std）
+  - 标签格式：归一化 cxcywh（transformers DETR 要求）
+  
+  性能目标（RTX 5090 32GB）：
+  - C++ 图像解码优化
+  - DataLoader（workers=12, prefetch=2）
+  - 目标吞吐：3-4 it/s

@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""
+快速冒烟测试脚本（Torchvision DETR）
+验证训练链路：dataloader -> forward -> backward -> save
+"""
+
+import argparse
+from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader, Subset
+from pycocotools.coco import COCO
+
+# 导入训练脚本中的组件
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+from train_detr_torchvision import CocoDetrDataset, collate_fn, build_model
+
+
+def smoke_test(
+    train_img: str,
+    train_ann: str,
+    num_classes: int = 3,
+    batch_size: int = 4,
+    max_iters: int = 10,
+    device: str = "cuda",
+):
+    """冒烟测试：10 步训练验证链路"""
+    
+    print("=" * 80)
+    print("🔥 Torchvision DETR 冒烟测试")
+    print("=" * 80)
+    
+    # 设备
+    device = torch.device(device)
+    
+    # 优化设置
+    torch.backends.cudnn.benchmark = True
+    if hasattr(torch, "set_float32_matmul_precision"):
+        torch.set_float32_matmul_precision("high")
+    
+    # 数据集（只用 100 张图）
+    print("📂 加载数据集...")
+    dataset = CocoDetrDataset(train_img, train_ann, min_size=800, max_size=1333)
+    subset = Subset(dataset, range(min(100, len(dataset))))
+    
+    loader = DataLoader(
+        subset,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=4,
+        collate_fn=collate_fn,
+        pin_memory=True,
+    )
+    
+    print(f"  ✓ 数据集大小: {len(subset)}")
+    print(f"  ✓ Batch size: {batch_size}")
+    
+    # 模型
+    print("📦 构建模型...")
+    model = build_model(num_classes, pretrained_backbone=False)
+    model.to(device)
+    model.train()
+    print(f"  ✓ 模型参数: {sum(p.numel() for p in model.parameters()) / 1e6:.1f}M")
+    
+    # 优化器
+    optimizer = torch.optim.AdamW(model.parameters(), lr=1e-4)
+    
+    # 训练几步
+    print("\n🚀 开始训练...")
+    print("-" * 80)
+    
+    losses = []
+    
+    for step, (images, targets) in enumerate(loader, start=1):
+        images = [img.to(device, non_blocking=True) for img in images]
+        targets = [{k: v.to(device, non_blocking=True) for k, v in t.items()} for t in targets]
+        
+        optimizer.zero_grad(set_to_none=True)
+        
+        # Forward
+        loss_dict = model(images, targets)
+        loss = sum(loss_dict.values())
+        
+        # Backward
+        loss.backward()
+        optimizer.step()
+        
+        losses.append(loss.item())
+        
+        print(f"Step [{step}/{max_iters}] Loss: {loss.item():.4f}")
+        
+        if step >= max_iters:
+            break
+    
+    # 验证 loss 是否下降（趋势）
+    avg_loss_first_half = sum(losses[:len(losses)//2]) / (len(losses)//2 + 1e-8)
+    avg_loss_second_half = sum(losses[len(losses)//2:]) / (len(losses)//2 + 1e-8)
+    
+    print("-" * 80)
+    print(f"📊 前半段平均 Loss: {avg_loss_first_half:.4f}")
+    print(f"📊 后半段平均 Loss: {avg_loss_second_half:.4f}")
+    
+    # 保存测试
+    print("\n💾 测试 checkpoint 保存...")
+    output_dir = Path("outputs/smoke_test_torchvision")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
+    checkpoint = {
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "losses": losses,
+    }
+    torch.save(checkpoint, output_dir / "smoke_test.pth")
+    print(f"  ✓ 保存成功: {output_dir / 'smoke_test.pth'}")
+    
+    # 加载测试
+    print("📥 测试 checkpoint 加载...")
+    loaded = torch.load(output_dir / "smoke_test.pth")
+    model.load_state_dict(loaded["model"])
+    print("  ✓ 加载成功")
+    
+    # 推理测试
+    print("\n🔮 测试推理模式...")
+    model.eval()
+    with torch.no_grad():
+        images_test = [images[0].to(device)]
+        outputs = model(images_test)
+        print(f"  ✓ 输出格式: {list(outputs[0].keys())}")
+        print(f"  ✓ 检测框数量: {len(outputs[0]['boxes'])}")
+    
+    print("\n" + "=" * 80)
+    print("✅ 冒烟测试通过！")
+    print("=" * 80)
+    print("\n可以开始完整训练：")
+    print(f"  python tools/train_detr_torchvision.py \\")
+    print(f"    --train-img {train_img} \\")
+    print(f"    --train-ann {train_ann} \\")
+    print(f"    --batch-size 16 --num-workers 12 --amp")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train-img", type=str, 
+                       default="data/traffic_coco/bdd100k_det/images/train")
+    parser.add_argument("--train-ann", type=str,
+                       default="data/traffic_coco/bdd100k_det/annotations/instances_train.json")
+    parser.add_argument("--num-classes", type=int, default=3)
+    parser.add_argument("--batch-size", type=int, default=4)
+    parser.add_argument("--max-iters", type=int, default=10)
+    parser.add_argument("--device", type=str, default="cuda")
+    
+    args = parser.parse_args()
+    
+    smoke_test(
+        args.train_img,
+        args.train_ann,
+        args.num_classes,
+        args.batch_size,
+        args.max_iters,
+        args.device,
+    )
+
+
+if __name__ == "__main__":
+    main()
