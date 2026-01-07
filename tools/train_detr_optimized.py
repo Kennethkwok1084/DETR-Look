@@ -108,8 +108,13 @@ class CocoDetrDataset(torch.utils.data.Dataset):
         img_info = self.coco.loadImgs(img_id)[0]
         img_path = self.root / img_info["file_name"]
 
-        # C++ 解码
-        img = read_image(str(img_path), mode=ImageReadMode.RGB).float() / 255.0
+        # C++ 解码（捕获损坏图像）
+        try:
+            img = read_image(str(img_path), mode=ImageReadMode.RGB).float() / 255.0
+        except Exception as e:
+            # 损坏图像：返回下一个
+            print(f"⚠️  跳过损坏图像: {img_path} ({e})")
+            return self.__getitem__((idx + 1) % len(self))
         
         # DETR 标准归一化（ImageNet）
         for c in range(3):
@@ -330,7 +335,17 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, use_amp, amp_d
     total_loss = 0.0
     start_time = time.time()
     
+    # 分段计时统计
+    total_t_load = 0.0
+    total_t_step = 0.0
+    t_batch_start = time.time()
+    
     for step, batch in enumerate(data_loader, start=1):
+        # 数据加载耗时
+        t_load = time.time() - t_batch_start
+        total_t_load += t_load
+        
+        t_step_start = time.time()
         pixel_values = batch["pixel_values"].to(device, non_blocking=True)
         pixel_mask = batch["pixel_mask"].to(device, non_blocking=True)
         labels = batch["labels"]
@@ -359,14 +374,27 @@ def train_one_epoch(model, optimizer, data_loader, device, epoch, use_amp, amp_d
         
         total_loss += loss.item()
         
+        # 训练计算耗时
+        torch.cuda.synchronize() if device.type == "cuda" else None
+        t_step = time.time() - t_step_start
+        total_t_step += t_step
+        
         if step % print_freq == 0:
-            torch.cuda.synchronize() if device.type == "cuda" else None
             elapsed = time.time() - start_time
             it_s = step / elapsed
             avg_loss = total_loss / step
             
+            # 计算耗时占比
+            avg_t_load = total_t_load / step
+            avg_t_step = total_t_step / step
+            pct_load = 100.0 * total_t_load / elapsed
+            pct_step = 100.0 * total_t_step / elapsed
+            
             print(f"Epoch [{epoch}] Step [{step}/{len(data_loader)}] "
                   f"Loss: {loss.item():.4f} (avg: {avg_loss:.4f}) | Speed: {it_s:.2f} it/s")
+            print(f"  ⏱️  t_load: {avg_t_load:.3f}s ({pct_load:.1f}%) | t_step: {avg_t_step:.3f}s ({pct_step:.1f}%)")
+        
+        t_batch_start = time.time()
     
     return {"loss": total_loss / len(data_loader)}
 
