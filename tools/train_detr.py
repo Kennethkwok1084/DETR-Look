@@ -22,7 +22,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from dataset import build_dataloader
-from models import build_detr_model
+from models import build_model, build_image_processor
 from utils import MetricsLogger, save_checkpoint, load_checkpoint, setup_logger
 from tools.eval_detr import evaluate
 
@@ -248,10 +248,8 @@ def train(config: dict, args):
     print("="*60)
     
     # 先创建image_processor（用于在worker中预处理）
-    model_name = config['model']['name']
-    if not model_name.startswith('facebook/'):
-        model_name = f'facebook/{model_name}'
-    image_processor = DetrImageProcessor.from_pretrained(model_name)
+    # 使用统一接口，自动根据 model.type 选择对应的处理器
+    image_processor = build_image_processor(config)
     
     # 构建DataLoader（传入processor实现worker中并行预处理）
     train_loader = build_dataloader(config, 'train', image_processor=image_processor)
@@ -262,7 +260,10 @@ def train(config: dict, args):
     print("🏗️  构建模型")
     print("="*60)
     
-    model = build_detr_model(config)
+    model_type = config['model'].get('type', 'detr')
+    print(f"模型类型: {model_type}")
+    
+    model = build_model(config)
     model = model.to(device)
     
     # ===== torch.compile 优化（PyTorch 2.0+ Transformer加速）=====

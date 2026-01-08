@@ -42,6 +42,7 @@ def get_extensions():
             "-D__CUDA_NO_HALF_OPERATORS__",
             "-D__CUDA_NO_HALF_CONVERSIONS__",
             "-D__CUDA_NO_HALF2_OPERATORS__",
+            "-allow-unsupported-compiler",  # 允许 VS 2018 与 CUDA 13.0
         ]
     else:
         raise NotImplementedError('Cuda is not availabel')
@@ -59,6 +60,18 @@ def get_extensions():
     ]
     return ext_modules
 
+class CustomBuildExtension(torch.utils.cpp_extension.BuildExtension):
+    """自定义构建扩展，跳过 CUDA 版本检查"""
+    def build_extensions(self):
+        # 跳过 CUDA 版本检查（允许 CUDA 13.0 使用 PyTorch CUDA 11.8）
+        import torch.utils.cpp_extension
+        original_check = torch.utils.cpp_extension._check_cuda_version
+        torch.utils.cpp_extension._check_cuda_version = lambda *args, **kwargs: None
+        try:
+            super().build_extensions()
+        finally:
+            torch.utils.cpp_extension._check_cuda_version = original_check
+
 setup(
     name="MultiScaleDeformableAttention",
     version="1.0",
@@ -67,5 +80,5 @@ setup(
     description="PyTorch Wrapper for CUDA Functions of Multi-Scale Deformable Attention",
     packages=find_packages(exclude=("configs", "tests",)),
     ext_modules=get_extensions(),
-    cmdclass={"build_ext": torch.utils.cpp_extension.BuildExtension},
+    cmdclass={"build_ext": CustomBuildExtension},
 )

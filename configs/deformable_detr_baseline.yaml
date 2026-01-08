@@ -1,0 +1,135 @@
+# Deformable DETR Baseline 配置
+# 用于交通场景目标检测的 Deformable DETR 训练配置
+
+# 数据集配置
+dataset:
+  name: "bdd100k_traffic"
+  root_dir: "data/traffic_coco/bdd100k_det"
+  train_ann: "annotations/instances_train.json"
+  val_ann: "annotations/instances_val.json"
+  test_ann: "annotations/instances_test.json"
+  num_classes: 3  # vehicle, traffic_sign, traffic_light
+  
+  # 数据增强
+  augmentation:
+    random_horizontal_flip: true
+    random_crop: false
+    color_jitter: true
+    normalize:
+      mean: [0.485, 0.456, 0.406]
+      std: [0.229, 0.224, 0.225]
+
+# 模型配置
+model:
+  type: "deformable_detr"  # 模型类型：deformable_detr
+  name: "deformable-detr"   # 模型名称（不依赖HF，使用官方实现）
+  
+  # Backbone
+  backbone: "resnet50"
+  dilation: false
+  position_embedding: "sine"  # sine 或 learned
+  position_embedding_scale: 6.283185307179586  # 2 * pi
+  num_feature_levels: 4  # 多尺度特征层数
+  
+  # Transformer
+  hidden_dim: 256
+  nheads: 8
+  enc_layers: 6
+  dec_layers: 6
+  dim_feedforward: 1024
+  dropout: 0.1
+  num_queries: 300
+  
+  # Deformable Attention
+  dec_n_points: 4  # decoder 采样点数
+  enc_n_points: 4  # encoder 采样点数
+  
+  # Deformable DETR 特有
+  two_stage: false  # 是否使用两阶段
+  with_box_refine: false  # 是否使用迭代边界框细化
+  
+  # 训练相关
+  aux_loss: true  # 辅助损失（中间层监督）
+  pretrained: false  # 是否使用预训练权重（官方实现需手动下载）
+  
+  # 损失权重
+  loss_weights:
+    class_loss_coef: 2.0
+    bbox_loss_coef: 5.0
+    giou_loss_coef: 2.0
+    focal_alpha: 0.25  # Focal Loss alpha参数
+  
+  # Matcher权重
+  set_cost_class: 2.0
+  set_cost_bbox: 5.0
+  set_cost_giou: 2.0
+
+# 训练配置
+training:
+  batch_size: 2  # Deformable DETR显存需求更大
+  num_workers: 4
+  max_epochs: 50
+  max_iters: null  # 如果设置则优先使用iter
+  
+  # 优化器
+  optimizer:
+    type: "AdamW"
+    lr: 0.0002  # Deformable DETR通常用稍高学习率
+    weight_decay: 0.0001
+    betas: [0.9, 0.999]
+  
+  # 学习率调度
+  lr_scheduler:
+    type: "StepLR"
+    step_size: 40
+    gamma: 0.1
+  
+  # 梯度裁剪
+  clip_max_norm: 0.1
+  
+  # 保存与日志
+  save_interval: 5  # 每N个epoch保存一次
+  eval_interval: 1  # 每N个epoch评估一次
+  log_interval: 50  # 每N个iter打印一次
+  
+  # === 训练基本功配置 ===
+  
+  # Resume / Checkpoint
+  resume: null  # checkpoint路径，null表示从头训练
+  
+  # AMP 混合精度
+  amp: false  # 启用自动混合精度训练（推荐GPU训练时开启）
+  
+  # 子集采样（用于快速验证或预算搜索）
+  subset_size: null  # 子集大小，null表示使用全量数据
+  subset_seed: 42    # 子集采样随机种子
+  subset_filter_empty: null  # 是否过滤空标注样本
+  
+  # 小样本过拟合模式（用于验证训练流程）
+  overfit: false  # 开启时：使用前N个样本，关闭shuffle和数据增强
+  
+  # Progressive Resizing（渐进式分辨率）
+  resize_schedule: null  # 格式: [[epoch1, size1], [epoch2, size2], ...]
+  
+  # Torch compile优化
+  compile: false  # PyTorch 2.0+ 编译优化
+  
+# 验证配置
+validation:
+  batch_size: 2
+  num_workers: 4
+  
+# 测试配置
+testing:
+  batch_size: 1
+  confidence_threshold: 0.7
+  nms_threshold: 0.5
+
+# 设备配置
+device:
+  type: "cuda"  # cuda 或 cpu
+  
+# 输出配置
+output:
+  base_dir: "outputs"
+  experiment_name: "deformable_detr_baseline"
