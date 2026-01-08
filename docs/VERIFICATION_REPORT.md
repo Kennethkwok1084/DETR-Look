@@ -1,4 +1,4 @@
-# DETR 训练脚本验证报告
+# Deformable DETR 训练脚本验证报告
 
 **日期**: 2026-01-06  
 **状态**: ✅ 所有检查通过
@@ -9,7 +9,7 @@
 
 ### ✅ 1. 导入检查
 - train_detr_optimized.py 成功导入
-- DETR 标准归一化参数正确：
+- Deformable DETR 标准归一化参数正确：
   - Mean: [0.485, 0.456, 0.406]
   - Std: [0.229, 0.224, 0.225]
 - benchmark_dataloader.py 成功导入
@@ -20,7 +20,7 @@
 - **对于非连续 category_id 的数据集（如 COCO），映射机制已就绪**
 
 ### ✅ 3. Bbox 格式
-- 图像正确归一化（DETR 标准）
+- 图像正确归一化（Deformable DETR 标准）
 - Bbox 正确转换为归一化 cxcywh 格式
 - Bbox 范围验证：[0.024, 0.918] ∈ [0, 1] ✓
 - 坐标系正确：
@@ -55,9 +55,9 @@
 ## 关键修复总结
 
 ### 第一轮修复（已完成）
-1. ✅ 添加 DETR 标准归一化
+1. ✅ 添加 Deformable DETR 标准归一化
 2. ✅ Bbox 转换为归一化 cxcywh
-3. ✅ 使用 DetrImageProcessor.post_process_object_detection
+3. ✅ 使用 DeformableDetrImageProcessor.post_process_object_detection
 4. ✅ 修复 args.num-workers → args.num_workers
 
 ### 第二轮修复（已完成）
@@ -73,7 +73,7 @@
    - 访问 `batch["pixel_values"]` 和 `batch["labels"]`
    - 使用 `class_labels` 而非 `labels`
 2. ✅ **低**：verify_fixes.py 覆盖 train_detr_optimized.py
-   - 检查 DETR 归一化、反向映射、orig_size 等关键路径
+   - 检查 Deformable DETR 归一化、反向映射、orig_size 等关键路径
    - 验证新的 dict 格式 collate_fn
 
 ---
@@ -88,7 +88,7 @@
 
 ### 数据加载测试
 - 图像解码：C++ (torchvision.io.read_image) ✓
-- 归一化：DETR 标准 ✓
+- 归一化：Deformable DETR 标准 ✓
 - Bbox 格式：归一化 cxcywh ✓
 - 坐标系：orig_size 正确保存 ✓
 - **collate_fn 格式**：dict 输出 (pixel_values, labels) ✓
@@ -134,7 +134,7 @@ python tools/train_detr_optimized.py \
 
 ### 3. 未来计划
 - 等待 CUDA 环境就绪
-- 迁移到 torchvision DETR（当其可用时）
+- 迁移到 torchvision Deformable DETR（当其可用时）
 - 保持相同的数据处理流程
 
 ---
@@ -144,7 +144,7 @@ python tools/train_detr_optimized.py \
 ### 坐标系统
 - **orig_size**: 原始图像尺寸 (H_orig, W_orig)
 - **size**: Resize 后尺寸 (H_new, W_new)
-- **关键**: DetrImageProcessor.post_process_object_detection 需要 **orig_size**
+- **关键**: DeformableDetrImageProcessor.post_process_object_detection 需要 **orig_size**
 
 ### Category ID 映射
 - **训练时**: 原始 ID → 连续 [0..N-1]

@@ -12,14 +12,14 @@
 **问题**:
 - `boxes_cxcywh` clamp 到 [0, 1] 后，bbox 大小可能改变
 - `area` 字段仍基于原始尺寸计算，导致不一致
-- 虽然 DETR 训练不强依赖 area，但不一致性可能导致潜在问题
+- 虽然 Deformable DETR 训练不强依赖 area，但不一致性可能导致潜在问题
 
 **解决方案**:
-直接删除 `area` 字段（DETR 训练流程不需要此字段）
+直接删除 `area` 字段（Deformable DETR 训练流程不需要此字段）
 
 ```python
 # tools/train_detr_optimized.py:98-100
-# 删除 area 字段（clamp 后 area 会不一致，且 DETR 训练不依赖 area）
+# 删除 area 字段（clamp 后 area 会不一致，且 Deformable DETR 训练不依赖 area）
 if "area" in target:
     del target["area"]
 ```
@@ -56,14 +56,14 @@ target["class_labels"] = target["class_labels"][valid_mask]
 
 **边界情况**:
 - 如果某张图所有框都被过滤掉，target["boxes"] 和 target["class_labels"] 会变成空张量
-- DETR 能正确处理空目标（作为负样本）
+- Deformable DETR 能正确处理空目标（作为负样本）
 
 ---
 
 ### 3. ✅ **[中等]** 离线模式评估兜底
 
 **问题**:
-- `--offline` 模式下，如果本地没有 `DetrImageProcessor` 缓存，`evaluate()` 会抛异常中断训练
+- `--offline` 模式下，如果本地没有 `DeformableDetrImageProcessor` 缓存，`evaluate()` 会抛异常中断训练
 - 真实场景：首次离线训练，或缓存被清理
 
 **解决方案**:
@@ -74,15 +74,15 @@ target["class_labels"] = target["class_labels"][valid_mask]
 # tools/train_detr_optimized.py:245-252
 if processor is None:
     try:
-        processor = DetrImageProcessor.from_pretrained(
-            "facebook/detr-resnet-50",
+        processor = DeformableDetrImageProcessor.from_pretrained(
+            "SenseTime/deformable-detr",
             local_files_only=True
         )
     except Exception as e:
         if offline_mode:
-            print(f"⚠️  离线模式下无法加载 DetrImageProcessor 缓存，跳过评估: {e}")
+            print(f"⚠️  离线模式下无法加载 DeformableDetrImageProcessor 缓存，跳过评估: {e}")
             return None  # 跳过评估
-        processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+        processor = DeformableDetrImageProcessor.from_pretrained("SenseTime/deformable-detr")
 ```
 
 ```python
@@ -209,7 +209,7 @@ python tools/train_detr_optimized.py \
 ### 2. 离线训练（有processor缓存）
 ```bash
 # 先联网缓存 processor
-python -c "from transformers import DetrImageProcessor; DetrImageProcessor.from_pretrained('facebook/detr-resnet-50')"
+python -c "from transformers import DeformableDetrImageProcessor; DeformableDetrImageProcessor.from_pretrained('SenseTime/deformable-detr')"
 
 # 离线训练
 python tools/train_detr_optimized.py \

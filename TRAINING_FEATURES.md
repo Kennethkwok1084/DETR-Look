@@ -185,7 +185,7 @@ python tools/train_detr.py --config configs/detr_smoke.yaml \
 
 **功能**:
 - ✅ 支持按 epoch 切换输入分辨率
-- ✅ 自动更新 `DetrImageProcessor.size`
+- ✅ 自动更新 `DeformableDetrImageProcessor.size`
 - ✅ 配置文件控制 resize schedule
 
 **配置**:
@@ -269,7 +269,7 @@ python tools/train_detr.py --config configs/detr_baseline_best.yaml
 
 ## 🚀 下一步
 
-1. **模型实现**：完成 DETR 模型核心组件
+1. **模型实现**：完成 Deformable DETR 模型核心组件
 2. **数据加载**：确保 BDD100K 数据已准备
 3. **冒烟测试**：运行完整训练流程验证
 4. **Baseline训练**：50 epoch 完整训练

@@ -8,6 +8,8 @@ DETR 训练脚本（使用 transformers 库 + 优化的数据加载）
 
 import argparse
 import json
+import signal
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -502,6 +504,34 @@ def main():
     
     device = torch.device(args.device)
     
+    # 全局变量用于信号处理
+    interrupted = False
+    checkpoint_data = {}
+    
+    def save_interrupt_checkpoint(model, optimizer, scheduler, epoch, output_dir):
+        """保存中断时的checkpoint"""
+        ckpt_path = output_dir / "interrupted.pth"
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict() if scheduler else None,
+        }, ckpt_path)
+        print(f"\n💾 已保存中断checkpoint: {ckpt_path}")
+    
+    def signal_handler(signum, frame):
+        """处理Ctrl+C信号"""
+        nonlocal interrupted
+        print(f"\n\n⚠️  收到中断信号 (Ctrl+C)，正在保存checkpoint...")
+        interrupted = True
+        if checkpoint_data:
+            save_interrupt_checkpoint(**checkpoint_data)
+        print("✅ Checkpoint已保存，训练将在当前epoch结束后停止")
+        print("   可使用 --resume interrupted.pth 恢复训练\n")
+    
+    # 注册信号处理器
+    signal.signal(signal.SIGINT, signal_handler)
+    
     torch.backends.cudnn.benchmark = True
     if hasattr(torch, "set_float32_matmul_precision"):
         torch.set_float32_matmul_precision("high")
@@ -639,6 +669,20 @@ def main():
     metrics_log = []
     
     for epoch in range(start_epoch, args.num_epochs):
+        # 更新checkpoint数据供信号处理器使用
+        checkpoint_data.update({
+            'model': model,
+            'optimizer': optimizer,
+            'scheduler': None,  # 如果有scheduler可以在这里更新
+            'epoch': epoch,
+            'output_dir': output_dir
+        })
+        
+        # 检查是否被中断
+        if interrupted:
+            print("\n🛑 训练已被用户中断")
+            break
+        
         epoch_start = time.time()
         
         train_metrics = train_one_epoch(

@@ -83,7 +83,7 @@ python tools/train_detr_optimized.py \
 
 **修复**:
 - 更新为检查 train_detr_optimized.py
-- 验证 DETR 归一化、反向映射、orig_size 等关键路径
+- 验证 Deformable DETR 归一化、反向映射、orig_size 等关键路径
 - 验证新的 dict 格式 collate_fn
 
 ---
@@ -231,8 +231,8 @@ train_script = project_root / 'tools' / 'train_detr_optimized.py'
 
 **新增检查项**:
 - `from transformers import` - transformers 导入
-- `DETR_MEAN = [0.485, 0.456, 0.406]` - DETR 归一化均值
-- `DETR_STD = [0.229, 0.224, 0.225]` - DETR 归一化标准差
+- `DETR_MEAN = [0.485, 0.456, 0.406]` - Deformable DETR 归一化均值
+- `DETR_STD = [0.229, 0.224, 0.225]` - Deformable DETR 归一化标准差
 - `reverse_cat_id_map` - Category ID 反向映射
 - `target_sizes = torch.stack([l["orig_size"]` - 使用 orig_size
 - `torchvision.io` - C++ 图像解码
@@ -250,7 +250,7 @@ train_script = project_root / 'tools' / 'train_detr_optimized.py'
 
 #### 3. verify_stack_handling()
 ```python
-# 修复前：检查 DetrImageProcessor 使用
+# 修复前：检查 DeformableDetrImageProcessor 使用
 # 检查 train_detr.py, eval_detr.py
 
 # 修复后：检查 Bbox 格式和坐标系
@@ -288,7 +288,7 @@ $ python tools/benchmark_dataloader.py --num-batches 5 --num-workers 2 --batch-s
 Batch 图像数: 4
 图像形状: torch.Size([3, 750, 1333]) (C, H, W)
 图像类型: torch.float32
-图像范围: [-2.118, 2.640]  ← DETR 归一化后的范围
+图像范围: [-2.118, 2.640]  ← Deformable DETR 归一化后的范围
 Labels[0] 键: ['boxes', 'class_labels', 'image_id', 'area', 'size', 'orig_size']
 Boxes 形状: torch.Size([27, 4])
 Class labels: [2, 2, 2, 0, 2]  ← 正确使用 class_labels
@@ -300,7 +300,7 @@ Class labels: [2, 2, 2, 0, 2]  ← 正确使用 class_labels
 - ✅ 正确解包 dict 格式
 - ✅ 正确访问 pixel_values 和 labels
 - ✅ 正确显示 class_labels
-- ✅ 图像范围正确（DETR 归一化后）
+- ✅ 图像范围正确（Deformable DETR 归一化后）
 - ✅ Boxes 为归一化 cxcywh 格式
 - ✅ **批次速度使用实际批次数**：5 / 0.98s = 5.10 it/s
 - ✅ **数据集太小测试**：预期 1000 批次，实际 250 批次，正确显示 10.83 it/s（不是虚高的 43.33 it/s）
@@ -318,9 +318,9 @@ $ python tools/verify_fixes.py
 ============================================================
 ✓ COCO导入
 ✓ transformers导入
-✓ DetrForObjectDetection
-✓ DETR归一化均值
-✓ DETR归一化标准差
+✓ DeformableDetrForObjectDetection
+✓ Deformable DETR归一化均值
+✓ Deformable DETR归一化标准差
 ✓ Category ID反向映射
 ✓ 使用orig_size作为target_sizes
 ✓ collate_fn返回dict
@@ -375,9 +375,9 @@ $ python tools/verify_fixes.py
 ## 完整修复清单（全部三轮）
 
 ### 第一轮（初始实现）
-1. ✅ 添加 DETR 标准归一化
+1. ✅ 添加 Deformable DETR 标准归一化
 2. ✅ Bbox 转换为归一化 cxcywh
-3. ✅ 使用 DetrImageProcessor.post_process_object_detection
+3. ✅ 使用 DeformableDetrImageProcessor.post_process_object_detection
 4. ✅ 修复 args.num-workers → args.num_workers
 
 ### 第二轮（评估正确性）

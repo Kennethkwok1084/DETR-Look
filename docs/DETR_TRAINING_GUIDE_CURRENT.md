@@ -1,9 +1,9 @@
-# DETR 训练实用指南（当前可用版本）
+# Deformable DETR 训练实用指南（当前可用版本）
 
 ## ⚠️ 重要声明
 
-**当前环境**: torchvision 0.24.1+cpu **不包含** DETR 模型  
-**实际使用**: transformers 库的 `DetrForObjectDetection`  
+**当前环境**: torchvision 0.24.1+cpu **不包含** Deformable DETR 模型  
+**实际使用**: transformers 库的 `DeformableDetrForObjectDetection`  
 **可用脚本**: `tools/train_detr_optimized.py`（已完整修复）
 
 ## 🚀 快速开始（3分钟）
@@ -89,7 +89,7 @@ python tools/train_detr_optimized.py \
    img = read_image(path, mode=ImageReadMode.RGB).float() / 255.0
    ```
 
-2. **DETR 标准归一化**
+2. **Deformable DETR 标准归一化**
    ```python
    DETR_MEAN = [0.485, 0.456, 0.406]
    DETR_STD = [0.229, 0.224, 0.225]
@@ -247,12 +247,12 @@ python tools/benchmark_dataloader.py \
 ```bash
 # 在线环境下提前下载
 python -c "
-from transformers import DetrForObjectDetection
-DetrForObjectDetection.from_pretrained('facebook/detr-resnet-50')
+from transformers import DeformableDetrForObjectDetection
+DeformableDetrForObjectDetection.from_pretrained('SenseTime/deformable-detr')
 "
 
 # 缓存位置（默认）
-~/.cache/huggingface/hub/models--facebook--detr-resnet-50/
+~/.cache/huggingface/hub/models--facebook--deformable-detr/
 ```
 
 ### Q5: COCO 评估报错

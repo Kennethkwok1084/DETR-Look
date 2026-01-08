@@ -8,7 +8,7 @@ detr_traffic_analysis/
 ├── dataset/              # 数据加载模块 ✅
 │   ├── __init__.py
 │   └── coco_dataset.py
-├── models/               # DETR模型模块 ✅
+├── models/               # Deformable DETR模型模块 ✅
 │   ├── __init__.py
 │   └── detr_model.py
 ├── utils/                # 工具函数 ✅
@@ -38,11 +38,11 @@ detr_traffic_analysis/
 - COCO格式数据集加载
 - 图像预处理和归一化
 - 支持batch collate
-- 返回格式符合DETR要求
+- 返回格式符合Deformable DETR要求
 
-#### ✅ DETR模型 (`models/detr_model.py`)
+#### ✅ Deformable DETR模型 (`models/detr_model.py`)
 - 基于Hugging Face transformers库
-- 加载facebook/detr-resnet-50预训练权重
+- 加载SenseTime/deformable-detr预训练权重
 - 自动调整类别数为3（vehicle, traffic_sign, traffic_light）
 - 模型参数: 41.5M (可训练: 41.3M)
 
@@ -253,7 +253,7 @@ training:
 
 1. **显存要求**: 16GB GPU可支持batch_size=4，8GB GPU建议batch_size=2
 2. **数据路径**: 确保 `data/traffic_coco/bdd100k_det` 存在且包含images和annotations
-3. **权重下载**: 首次运行会自动下载DETR预训练权重（约167MB），需要网络连接
+3. **权重下载**: 首次运行会自动下载Deformable DETR预训练权重（约167MB），需要网络连接
 4. **日志输出**: 所有日志统一输出到 `outputs/<experiment>/` 目录
 
 ## 🐛 常见问题

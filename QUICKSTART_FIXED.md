@@ -1,4 +1,4 @@
-# DETR交通分析项目 - Bug修复完成
+# Deformable DETR交通分析项目 - Bug修复完成
 
 ## ✅ 所有Bug已修复
 
@@ -44,7 +44,7 @@ python tools/train_detr.py --config configs/detr_smoke.yaml
 ```
 
 **预期结果**:
-- ✅ 成功加载DETR预训练模型 (facebook/detr-resnet-50)
+- ✅ 成功加载Deformable DETR预训练模型 (SenseTime/deformable-detr)
 - ✅ 训练2个epoch（每epoch最多100 iter）
 - ✅ 每epoch运行验证并计算mAP
 - ✅ 保存best.pth（基于验证mAP）
@@ -87,7 +87,7 @@ python tools/eval_detr.py \
 ```yaml
 # configs/detr_baseline.yaml & detr_smoke.yaml
 model:
-  name: "detr-resnet-50"  # 修复前: "detr_resnet50"
+  name: "deformable-detr"  # 修复前: "deformable-detr"
 ```
 
 ### 修复2: 可配置的评估阈值
@@ -116,9 +116,9 @@ python tools/eval_detr.py ... --score-threshold 0.3
 
 **1. 模型加载失败**
 ```
-Error: Can't load model "detr_resnet50"
+Error: Can't load model "deformable-detr"
 ```
-→ 检查配置文件是否使用 `"detr-resnet-50"`
+→ 检查配置文件是否使用 `"deformable-detr"`
 
 **2. timm导入错误**
 ```
@@ -156,7 +156,7 @@ detr_traffic_analysis/
 ├── dataset/
 │   └── coco_dataset.py        # COCO数据加载（支持可变尺寸）
 ├── models/
-│   └── detr_model.py          # DETR模型封装
+│   └── detr_model.py          # Deformable DETR模型封装
 ├── tools/
 │   ├── train_detr.py          # 训练脚本（含验证）
 │   ├── eval_detr.py           # 评估脚本
@@ -210,8 +210,8 @@ detr_traffic_analysis/
 
 ## 🔗 参考资料
 
-- [DETR论文](https://arxiv.org/abs/2005.12872)
-- [HuggingFace DETR](https://huggingface.co/docs/transformers/model_doc/detr)
+- [Deformable DETR论文](https://arxiv.org/abs/2010.04159)
+- [HuggingFace Deformable DETR](https://huggingface.co/docs/transformers/model_doc/deformable_detr)
 - [BDD100K数据集](https://www.bdd100k.com/)
 - [COCO评估指标](https://cocodataset.org/#detection-eval)
 

@@ -1,7 +1,7 @@
-# 基于 DETR 的交通标志与车辆多目标检测系统
+# 基于 Deformable DETR 的交通标志与车辆多目标检测系统
 
 2026 届本科毕业论文工程源码
-题目：基于 DETR 的交通标志与车辆多目标检测系统的设计与实现
+题目：基于 Deformable DETR 的交通标志与车辆多目标检测系统的设计与实现
 关键词：Deformable DETR，小目标检测，多目标跟踪，Streamlit 可视化
 
 ---
@@ -45,19 +45,23 @@
 ### 🚧 进行中
 
 - ⏸️ 数据集下载与转换（等待BDD100K数据）
-- ⏸️ DETR模型实现
+- ⏸️ Deformable DETR模型实现
 - ⏸️ 训练循环实现
 
 ### 📅 待开发
 
 - ⬜ 数据加载器（Dataset/DataLoader）
-- ⬜ DETR模型核心组件（backbone/transformer/heads）
+- ⬜ Deformable DETR模型核心组件（backbone/transformer/heads）
 - ⬜ 训练与评估流程
 - ⬜ 跟踪器封装（ByteTrack/OC-SORT）
 - ⬜ Streamlit可视化界面
 - ⬜ 完整评测流程
 
 ---
+
+### 🔁 Deformable DETR 迁移补充说明（新增）
+
+本段为新增补充说明，原有 DETR 相关描述不做删除或替换。接下来将以 Deformable DETR 作为核心路线，迁移步骤按“模型初始化 → 预处理/后处理 → 评估对齐”的顺序推进。为保证现有调用链稳定，脚本与配置文件命名仍保留 `train_detr.py` 与 `configs/detr_*.yaml`，迁移稳定后再统一整理与清理。
 
 ## 🚀 快速开始
 

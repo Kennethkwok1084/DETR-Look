@@ -45,7 +45,7 @@ python tools/smoke_test.py
 
 第2阶段：检测模型训练（3-5天）
   ├─ 实现数据加载器
-  ├─ 实现DETR模型
+  ├─ 实现Deformable DETR模型
   ├─ Baseline训练
   ├─ 小目标优化训练
   └─ 检测指标评测
@@ -69,6 +69,10 @@ python tools/smoke_test.py
   └─ 演示视频录制
 ```
 
+### 0.2A Deformable DETR 迁移补充说明（新增）
+
+本段为新增补充说明，原有 DETR 相关内容保持不变。后续迁移将以 Deformable DETR 为核心主线，优先完成模型初始化与权重加载，再完成预处理/后处理一致性对齐，最后补齐 COCO 评估与指标复现。为降低迁移风险，脚本与配置文件命名将继续沿用 `train_detr.py` 与 `configs/detr_*.yaml`，待验证稳定后再统一重命名与清理。
+
 ### 0.3 已完成工作概览
 
 #### ✅ 项目架构
@@ -89,7 +93,7 @@ python tools/smoke_test.py
 
 #### 📋 待开发模块
 - 数据加载器（Dataset/DataLoader）
-- DETR模型实现（backbone/transformer/heads）
+- Deformable DETR模型实现（backbone/transformer/heads）
 - 训练循环与评估逻辑
 - 跟踪器封装
 - Streamlit前端
@@ -100,7 +104,7 @@ python tools/smoke_test.py
 节奏原则：单变量、可复现、每步有产出（日志/配置/权重）。
 
 执行约束：
-- 训练框架基于现有 DETR 实现，保持论文题目一致性。
+- 训练框架基于现有 Deformable DETR 实现，保持论文题目一致性。
 - 日志输出优先 `metrics.json` 或 `metrics.csv`，字段保持统一。
 - 执行前确认 `data/traffic_coco` 中已有可用数据集（当前仓库检测到 `bdd100k_det` 与 `tt100k_det`）。
 
@@ -1202,7 +1206,7 @@ python tools/convert_to_coco.py \
 
 ---
 
-### 3.11 性能瓶颈与官方 DETR (torchvision) 切换记录（5090）
+### 3.11 性能瓶颈与官方 Deformable DETR (torchvision) 切换记录（5090）
 
 **背景与现象**：
 - 设备：RTX 5090 32GB，AMP 开启
@@ -1212,17 +1216,17 @@ python tools/convert_to_coco.py \
 
 **结论**：
 - 训练吞吐受“CPU 预处理 + GPU 计算”双瓶颈影响
-- PIL + DetrImageProcessor 预处理成本高，DataLoader 过大并行导致争用
+- PIL + DeformableDetrImageProcessor 预处理成本高，DataLoader 过大并行导致争用
 - 纯 I/O 不是首要瓶颈（本地 NVMe 条件下）
 
 **改进决策**：
-1. 官方实现切换至 torchvision DETR（保留 facebookresearch 作为对照基线）
+1. 官方实现切换至 torchvision Deformable DETR（保留 facebookresearch 作为对照基线）
 2. 保持分辨率与精度目标一致（默认 min_size=800, max_size=1333）
 3. 通过数据管道优化拉升 it/s（不牺牲精度）
 
 **改进要点**：
 - 图像读取：使用 `torchvision.io.read_image`（C++ 解码）替代 PIL
-- 标签映射：COCO category_id 统一映射到连续 [0..N-1]（DETR 使用 num_classes + 1 作为 no-object）
+- 标签映射：COCO category_id 统一映射到连续 [0..N-1]（Deformable DETR 使用 num_classes + 1 作为 no-object）
 - DataLoader：workers 调整到 8-16，prefetch_factor 2-4，保持 pin_memory/persistent_workers
 - 训练加速：non_blocking 传输 + CUDA prefetcher；开启 cudnn.benchmark 与 matmul_precision("high")
 - 语言重构：Rust/Go 重写文件 I/O 收益有限，优先考虑数据格式化（FFCV/WebDataset/LMDB）

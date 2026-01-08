@@ -1,4 +1,4 @@
-# DETR 训练脚本修复总结
+# Deformable DETR 训练脚本修复总结
 
 **最后更新**: 2026-01-07  
 **状态**: ✅ 所有修复完成并验证通过
@@ -10,9 +10,9 @@
 ### 第一轮修复（2026-01-05）
 **文档**: [FIXES_2026_01_06.md](FIXES_2026_01_06.md)
 
-1. ✅ 添加 DETR 标准归一化（ImageNet mean/std）
+1. ✅ 添加 Deformable DETR 标准归一化（ImageNet mean/std）
 2. ✅ Bbox 转换为归一化 cxcywh 格式
-3. ✅ 使用官方 DetrImageProcessor.post_process_object_detection
+3. ✅ 使用官方 DeformableDetrImageProcessor.post_process_object_detection
 4. ✅ 修复参数名错误（args.num-workers → args.num_workers）
 
 ### 第二轮修复（2026-01-06）
@@ -66,7 +66,7 @@
 
 ### 数据处理
 - **图像解码**: torchvision.io.read_image（C++ 解码，~30% 加速）
-- **归一化**: DETR 标准 ImageNet mean/std
+- **归一化**: Deformable DETR 标准 ImageNet mean/std
 - **Bbox 格式**: 归一化 cxcywh（center_x, center_y, width, height in [0,1]）
 - **输出格式**: dict `{"pixel_values": ..., "labels": ...}`
 
@@ -192,12 +192,12 @@ python tools/train_detr_optimized.py \
 
 ### 待迁移（低优先级）
 - [ ] 等待 CUDA 环境就绪
-- [ ] 验证 torchvision 是否包含 DETR
-- [ ] 迁移到 torchvision DETR（保持相同数据处理）
+- [ ] 验证 torchvision 是否包含 Deformable DETR
+- [ ] 迁移到 torchvision Deformable DETR（保持相同数据处理）
 
 ### 已知限制
-- **CPU 环境**: 当前仅支持 CPU（torchvision 0.24.1+cpu 缺少 DETR）
-- **transformers 依赖**: 临时使用 transformers 库的 DetrForObjectDetection
+- **CPU 环境**: 当前仅支持 CPU（torchvision 0.24.1+cpu 缺少 Deformable DETR）
+- **transformers 依赖**: 临时使用 transformers 库的 DeformableDetrForObjectDetection
 - **性能**: CPU 环境下 it/s 较低，等待 CUDA 环境
 
 ---
