@@ -86,12 +86,9 @@ class CocoDetectionDataset(Dataset):
             image: PIL.Image (RGB，未归一化)
             target: COCO格式标注字典 {
                 'image_id': int,
-                'annotations': List[{
-                    'bbox': [x, y, w, h],  # COCO格式：xywh像素坐标
-                    'category_id': int,
-                    'area': float,
-                    'iscrowd': int,
-                }]
+                'annotations': List[{...}],
+                'orig_size': [height, width],  # 原图尺寸（评估时必须）
+                'size': [height, width],       # 同 orig_size（兼容性）
             }
         """
         img_id = self.ids[idx]
@@ -102,6 +99,10 @@ class CocoDetectionDataset(Dataset):
         img_info = self.coco.loadImgs(img_id)[0]
         img_path = self.img_folder / img_info['file_name']
         image = Image.open(img_path).convert('RGB')
+        
+        # 获取原图尺寸（height, width）
+        orig_width, orig_height = image.size
+        orig_size = [orig_height, orig_width]
         
         # 构建COCO格式标注（DetrImageProcessor期望的格式）
         annotations = []
@@ -116,6 +117,8 @@ class CocoDetectionDataset(Dataset):
         target = {
             'image_id': img_id,
             'annotations': annotations,
+            'orig_size': orig_size,  # 评估时用于计算 target_sizes
+            'size': orig_size,       # 兼容性字段
         }
         
         # 应用数据增强（如果提供）
@@ -173,11 +176,13 @@ def make_collate_fn_with_processor(image_processor):
     """
     创建带预处理的collate_fn（在worker进程中并行处理）
     
+    注意：保留原始 targets 以确保 image_id 等元数据存在
+    
     Args:
         image_processor: DetrImageProcessor实例
     
     Returns:
-        collate_fn: 返回已处理的tensor和labels
+        collate_fn: 返回已处理的tensor和labels + 原始 targets
     """
     def collate_with_processor(batch: List[Tuple[Image.Image, Dict]]):
         images, targets = zip(*batch)
@@ -188,6 +193,10 @@ def make_collate_fn_with_processor(image_processor):
             annotations=list(targets),
             return_tensors='pt'
         )
+        
+        # 保留原始 targets（包含 image_id）
+        # HF processor 的 labels 可能不包含 image_id
+        encoding['targets'] = list(targets)
         
         return encoding
     

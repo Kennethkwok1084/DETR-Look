@@ -135,3 +135,6 @@ outputs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Third-party upstream repository (clone reference only)
+third_party/deformable_detr_upstream/

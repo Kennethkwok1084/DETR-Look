@@ -4,20 +4,15 @@
 # 数据集配置
 dataset:
   name: "bdd100k_traffic"
-  root_dir: "data/traffic_coco/bdd100k_det"
-  train_ann: "annotations/instances_train.json"
-  val_ann: "annotations/instances_val.json"
-  test_ann: "annotations/instances_test.json"
+  type: "coco"
   num_classes: 3  # vehicle, traffic_sign, traffic_light
   
-  # 数据增强
-  augmentation:
-    random_horizontal_flip: true
-    random_crop: false
-    color_jitter: true
-    normalize:
-      mean: [0.485, 0.456, 0.406]
-      std: [0.229, 0.224, 0.225]
+  # 路径配置（支持两种方式）
+  # 方式1: 直接指定 train_img/val_img
+  train_img: "data/traffic_coco/train"
+  train_ann: "data/traffic_coco/annotations/instances_train.json"
+  val_img: "data/traffic_coco/val"
+  val_ann: "data/traffic_coco/annotations/instances_val.json"
 
 # 模型配置
 model:
