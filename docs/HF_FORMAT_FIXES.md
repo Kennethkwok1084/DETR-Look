@@ -1,4 +1,4 @@
-# HuggingFace Deformable DETR 格式修复总结
+# HuggingFace DETR 格式修复总结
 
 **日期**: 2026-01-05  
 **修复范围**: 训练/评测数据流的HuggingFace标准对齐
@@ -10,7 +10,7 @@
 ### 1. 高优先级：训练时annotations传参格式错误
 
 **问题描述**:  
-`train_detr.py` 中传给 `DeformableDetrImageProcessor` 的 `annotations` 参数格式不符合HF预期。
+`train_detr.py` 中传给 `DetrImageProcessor` 的 `annotations` 参数格式不符合HF预期。
 
 **错误代码**:
 ```python
@@ -20,7 +20,7 @@ encoding = image_processor(images=images, annotations=annotations, return_tensor
 ```
 
 **原因分析**:
-- `DeformableDetrImageProcessor` 期望每张图一个完整的dict，包含 `image_id` 和 `annotations`
+- `DetrImageProcessor` 期望每张图一个完整的dict，包含 `image_id` 和 `annotations`
 - 我们的Dataset已经返回了正确的格式：`{'image_id': int, 'annotations': [...]}`
 - 但训练代码只拆出了 `annotations` 列表，丢失了 `image_id`
 - 导致处理器无法正确匹配图像和标注，可能出现标签错位
@@ -42,12 +42,12 @@ encoding = image_processor(
 ### 2. 中优先级：facebook/前缀重复拼接
 
 **问题描述**:  
-`detr_model.py` 中强制拼接 `facebook/` 前缀，若配置里已写 `SenseTime/deformable-detr` 会变成 `facebook/facebook/...`
+`detr_model.py` 中强制拼接 `facebook/` 前缀，若配置里已写 `facebook/detr-resnet-50` 会变成 `facebook/facebook/...`
 
 **错误代码**:
 ```python
 # ❌ 错误：无条件拼接前缀
-self.model = DeformableDetrForObjectDetection.from_pretrained(
+self.model = DetrForObjectDetection.from_pretrained(
     f"facebook/{model_config['name']}",  # 如果config['name']已包含facebook/会重复
     num_labels=num_classes,
 )
@@ -59,15 +59,15 @@ self.model = DeformableDetrForObjectDetection.from_pretrained(
 model_name = model_config['name']
 if not model_name.startswith('facebook/'):
     model_name = f"facebook/{model_name}"
-self.model = DeformableDetrForObjectDetection.from_pretrained(
+self.model = DetrForObjectDetection.from_pretrained(
     model_name,
     num_labels=num_classes,
 )
 ```
 
 **支持场景**:
-- 配置写 `"deformable-detr"` → 自动补全为 `"SenseTime/deformable-detr"`
-- 配置写 `"SenseTime/deformable-detr"` → 保持不变
+- 配置写 `"detr-resnet-50"` → 自动补全为 `"facebook/detr-resnet-50"`
+- 配置写 `"facebook/detr-resnet-50"` → 保持不变
 - 未来支持其他组织的模型：`"hustvl/yolos-tiny"` → 保持不变
 
 **影响范围**: `models/detr_model.py` (lines 33-36)
@@ -77,13 +77,13 @@ self.model = DeformableDetrForObjectDetection.from_pretrained(
 ### 3. 中优先级：评测时处理器与模型不一致
 
 **问题描述**:  
-`eval_detr.py` 中硬编码处理器为 `SenseTime/deformable-detr`，若后续换模型会导致处理器与模型参数不一致。
+`eval_detr.py` 中硬编码处理器为 `facebook/detr-resnet-50`，若后续换模型会导致处理器与模型参数不一致。
 
 **错误代码**:
 ```python
 # ❌ 错误：硬编码模型名称
 if image_processor is None:
-    image_processor = DeformableDetrImageProcessor.from_pretrained('SenseTime/deformable-detr')
+    image_processor = DetrImageProcessor.from_pretrained('facebook/detr-resnet-50')
 ```
 
 **风险**:
@@ -97,8 +97,8 @@ if image_processor is None:
     model_name = config['model']['name']
     if not model_name.startswith('facebook/'):
         model_name = f"facebook/{model_name}"
-    logger.info(f"初始化DeformableDetrImageProcessor: {model_name}")
-    image_processor = DeformableDetrImageProcessor.from_pretrained(model_name)
+    logger.info(f"初始化DetrImageProcessor: {model_name}")
+    image_processor = DetrImageProcessor.from_pretrained(model_name)
 ```
 
 **影响范围**: `tools/eval_detr.py` (lines 57-60)
@@ -113,13 +113,13 @@ if image_processor is None:
 **现状**:
 ```python
 def make_transforms(image_set: str, config: dict) -> Any:
-    # DeformableDetrImageProcessor会自动处理resize/normalize
+    # DetrImageProcessor会自动处理resize/normalize
     # 这里不做任何变换，直接返回None
     return None
 ```
 
 **说明**:
-- 当前设计：`DeformableDetrImageProcessor` 统一处理 resize/pad/normalize
+- 当前设计：`DetrImageProcessor` 统一处理 resize/pad/normalize
 - 额外增强（flip/jitter）需要在Dataset中对PIL图像应用，然后再传给processor
 - 不是bug，但需要文档说明如何添加增强
 
@@ -178,22 +178,22 @@ python3 tools/verify_hf_format.py
 ## 🔍 关键设计决策
 
 ### 为什么直接传targets？
-- HF的 `DeformableDetrImageProcessor` 需要 `image_id` 来正确关联图像和标注
+- HF的 `DetrImageProcessor` 需要 `image_id` 来正确关联图像和标注
 - 我们的Dataset已经返回了符合HF预期的格式
 - 训练代码只需透传，不需要拆分重组
 
 ### 为什么要前缀判断？
-- 支持多种配置风格：简写（`deformable-detr`）或完整名（`SenseTime/deformable-detr`）
+- 支持多种配置风格：简写（`detr-resnet-50`）或完整名（`facebook/detr-resnet-50`）
 - 未来可能用其他组织的模型（如 `hustvl/yolos-tiny`），不能强制加 `facebook/`
 - 统一处理逻辑，避免硬编码
 
 ### 为什么processor要从配置读？
 - 训练和评测必须使用相同的预处理参数
-- 不同Deformable DETR变体（resnet-50/101, DC5等）的预处理参数可能不同
+- 不同DETR变体（resnet-50/101, DC5等）的预处理参数可能不同
 - 硬编码会导致模型升级时忘记同步更新
 
 ### 为什么数据增强返回None？
-- `DeformableDetrImageProcessor` 已经处理了resize/pad/normalize，这是标准化预处理
+- `DetrImageProcessor` 已经处理了resize/pad/normalize，这是标准化预处理
 - 额外的增强（flip/jitter）是可选的，应该在processor之前对PIL图像应用
 - 返回None简化了默认流程，需要增强时再启用
 
@@ -201,7 +201,7 @@ python3 tools/verify_hf_format.py
 
 ## 📚 参考资料
 
-- [HuggingFace Deformable DETR文档](https://huggingface.co/docs/transformers/model_doc/deformable_detr)
-- [DeformableDetrImageProcessor API](https://huggingface.co/docs/transformers/model_doc/deformable_detr#transformers.DeformableDetrImageProcessor)
+- [HuggingFace DETR文档](https://huggingface.co/docs/transformers/model_doc/detr)
+- [DetrImageProcessor API](https://huggingface.co/docs/transformers/model_doc/detr#transformers.DetrImageProcessor)
 - [数据增强指南](docs/data_augmentation_guide.py)
 - [验证脚本](tools/verify_hf_format.py)
