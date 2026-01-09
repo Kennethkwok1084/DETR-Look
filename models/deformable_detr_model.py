@@ -180,6 +180,12 @@ class DeformableDETRModelWrapper(nn.Module):
         # focal_alpha 可能在 model_config 或 loss_weights 中
         args.focal_alpha = loss_weights.get('focal_alpha', model_config.get('focal_alpha', 0.25))
         
+        # Backbone 学习率（用于判断是否训练 backbone）
+        # 从 training.optimizer.lr_backbone 或 training.lr_backbone 读取
+        training_config = config.get('training', {})
+        optimizer_config = training_config.get('optimizer', {})
+        args.lr_backbone = optimizer_config.get('lr_backbone', training_config.get('lr_backbone', 1e-5))
+        
         # 其他参数
         args.dataset_file = 'coco'
         
