@@ -2,6 +2,7 @@
 """
 Deformable DETR 模型封装
 基于官方实现，适配项目训练流程
+提供 HuggingFace 兼容接口
 """
 
 import sys
@@ -16,9 +17,16 @@ THIRD_PARTY_PATH = Path(__file__).parent.parent / "third_party" / "deformable_de
 if str(THIRD_PARTY_PATH) not in sys.path:
     sys.path.insert(0, str(THIRD_PARTY_PATH))
 
-# 延迟导入，避免在模块加载时就报错
+# 缓存导入的模块，避免重复执行
+_DEFORMABLE_MODULES = None
+
 def _lazy_import_deformable_detr():
-    """延迟导入 Deformable DETR 模块"""
+    """延迟导入 Deformable DETR 模块（仅执行一次）"""
+    global _DEFORMABLE_MODULES
+    
+    if _DEFORMABLE_MODULES is not None:
+        return _DEFORMABLE_MODULES
+    
     import sys
     import importlib
     
@@ -43,7 +51,7 @@ def _lazy_import_deformable_detr():
         import models.deformable_transformer as transformer_module
         import util.misc as misc_module
         
-        result = {
+        _DEFORMABLE_MODULES = {
             'DeformableDETR': deformable_detr_module.DeformableDETR,
             'SetCriterion': deformable_detr_module.SetCriterion,
             'MLP': deformable_detr_module.MLP,
@@ -53,7 +61,7 @@ def _lazy_import_deformable_detr():
             'NestedTensor': misc_module.NestedTensor,
             'nested_tensor_from_tensor_list': misc_module.nested_tensor_from_tensor_list,
         }
-        return result
+        return _DEFORMABLE_MODULES
     except Exception as e:
         raise ImportError(
             f"无法导入 Deformable DETR 模块。\n"
@@ -195,22 +203,55 @@ class DeformableDETRModel(nn.Module):
         
         return args
     
-    def forward(self, samples, targets=None):
+    def forward(self, pixel_values=None, pixel_mask=None, labels=None, samples=None, targets=None):
         """
-        前向传播
+        前向传播 - 兼容 HuggingFace 和官方接口
         
         Args:
-            samples: 图像 tensor 或 NestedTensor
-            targets: 训练时提供，List[Dict]，包含 'labels' 和 'boxes'
+            pixel_values: [HF 风格] 图像张量 (batch_size, 3, H, W)
+            pixel_mask: [HF 风格] 掩码张量 (batch_size, H, W)
+            labels: [HF 风格] 标签列表，包含 'class_labels' 和 'boxes'
+            samples: [官方风格] NestedTensor 或图像列表
+            targets: [官方风格] 标签列表，包含 'labels' 和 'boxes'
         
         Returns:
-            如果 targets 不为 None，返回 loss dict
-            否则返回预测结果
+            如果提供标签，返回包含 loss 的输出对象
+            否则返回预测结果字典
         """
         # 获取必要的类
         modules = _lazy_import_deformable_detr()
         NestedTensor = modules['NestedTensor']
         nested_tensor_from_tensor_list = modules['nested_tensor_from_tensor_list']
+        
+        # 参数转换：HF 风格 -> 官方风格
+        if pixel_values is not None:
+            # HF 接口：构造 NestedTensor
+            if pixel_mask is None:
+                # 如果没有提供 mask，创建全 1 mask
+                pixel_mask = torch.ones((pixel_values.shape[0], pixel_values.shape[2], pixel_values.shape[3]),
+                                       dtype=torch.bool, device=pixel_values.device)
+            
+            samples = NestedTensor(pixel_values, pixel_mask)
+            
+            # 标签字段映射：class_labels -> labels
+            if labels is not None:
+                targets = []
+                for item in labels:
+                    target = {}
+                    # HF 使用 'class_labels'，官方使用 'labels'
+                    if 'class_labels' in item:
+                        target['labels'] = item['class_labels']
+                    elif 'labels' in item:
+                        target['labels'] = item['labels']
+                    
+                    # boxes 字段保持不变
+                    if 'boxes' in item:
+                        target['boxes'] = item['boxes']
+                    
+                    targets.append(target)
+        
+        elif samples is None:
+            raise ValueError("必须提供 pixel_values 或 samples 参数")
         
         # 确保输入是 NestedTensor 格式
         if not isinstance(samples, NestedTensor):
@@ -235,7 +276,7 @@ class DeformableDETRModel(nn.Module):
                 'pred_boxes': outputs['pred_boxes'],
             })()
         else:
-            # 推理模式
+            # 推理模式：返回官方格式（与 HF 不同）
             return outputs
 
 
@@ -250,3 +291,59 @@ def build_deformable_detr_model(config: dict) -> nn.Module:
         DeformableDETRModel 实例
     """
     return DeformableDETRModel(config)
+
+
+def post_process_deformable_detr(outputs, target_sizes, threshold=0.7):
+    """
+    Deformable DETR 后处理函数
+    将模型输出转换为 COCO 格式的检测结果
+    
+    Args:
+        outputs: 模型输出字典，包含 'pred_logits' 和 'pred_boxes'
+        target_sizes: 目标尺寸张量 (batch_size, 2) [height, width]
+        threshold: 置信度阈值
+    
+    Returns:
+        List[Dict]: 每张图像的检测结果，格式与 HF 后处理一致
+            - scores: 置信度列表
+            - labels: 类别 ID 列表
+            - boxes: 边界框列表 (xyxy 格式)
+    """
+    import torch.nn.functional as F
+    
+    # 获取预测
+    logits = outputs['pred_logits']  # (batch_size, num_queries, num_classes)
+    boxes = outputs['pred_boxes']    # (batch_size, num_queries, 4) 归一化的 cxcywh
+    
+    # Softmax 获取类别概率
+    prob = F.softmax(logits, -1)
+    
+    # 获取最大概率和对应类别（排除背景类）
+    scores, labels = prob[..., :-1].max(-1)
+    
+    # 转换 boxes 从 cxcywh 归一化格式到 xyxy 像素格式
+    # cxcywh -> xyxy
+    boxes_xyxy = torch.zeros_like(boxes)
+    boxes_xyxy[..., 0] = boxes[..., 0] - boxes[..., 2] / 2  # x1 = cx - w/2
+    boxes_xyxy[..., 1] = boxes[..., 1] - boxes[..., 3] / 2  # y1 = cy - h/2
+    boxes_xyxy[..., 2] = boxes[..., 0] + boxes[..., 2] / 2  # x2 = cx + w/2
+    boxes_xyxy[..., 3] = boxes[..., 1] + boxes[..., 3] / 2  # y2 = cy + h/2
+    
+    # 缩放到目标尺寸
+    img_h, img_w = target_sizes.unbind(1)
+    scale_fct = torch.stack([img_w, img_h, img_w, img_h], dim=1)
+    boxes_xyxy = boxes_xyxy * scale_fct[:, None, :]
+    
+    # 过滤低置信度预测
+    results = []
+    for s, l, b in zip(scores, labels, boxes_xyxy):
+        # 应用阈值
+        keep = s > threshold
+        
+        results.append({
+            'scores': s[keep],
+            'labels': l[keep],
+            'boxes': b[keep],
+        })
+    
+    return results

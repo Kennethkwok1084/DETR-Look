@@ -44,25 +44,26 @@ def build_image_processor(config: dict):
     Returns:
         图像处理器实例
     """
-    from transformers import DetrImageProcessor, DeformableDetrImageProcessor
+    from transformers import DetrImageProcessor
     
     model_type = config['model'].get('type', 'detr').lower()
     model_name = config['model']['name']
     
-    # 处理模型名称前缀
-    if '/' not in model_name:
-        # 如果没有包含 /，根据模型类型添加默认前缀
-        if model_type == 'detr':
-            model_name = f"facebook/{model_name}"
-        elif model_type == 'deformable_detr' or model_type == 'deformable-detr':
-            model_name = f"SenseTime/{model_name}"
-    
     if model_type == 'detr':
+        # DETR 使用 HuggingFace 处理器
+        # 处理模型名称前缀
+        if '/' not in model_name:
+            model_name = f"facebook/{model_name}"
+        
         print(f"🖼️  加载 DETR 图像处理器: {model_name}")
         return DetrImageProcessor.from_pretrained(model_name)
+    
     elif model_type == 'deformable_detr' or model_type == 'deformable-detr':
-        print(f"🖼️  加载 Deformable DETR 图像处理器: {model_name}")
-        return DeformableDetrImageProcessor.from_pretrained(model_name)
+        # Deformable DETR 使用本地处理器，避免下载
+        print(f"🖼️  创建本地 Deformable DETR 图像处理器")
+        from utils.image_processor import build_local_image_processor
+        return build_local_image_processor(config)
+    
     else:
         raise ValueError(f"不支持的模型类型: {model_type}")
 
