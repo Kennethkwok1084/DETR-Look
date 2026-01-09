@@ -90,11 +90,18 @@ try:
     num_queries = 300
     
     # 创建虚拟输入
+    # input_spatial_shapes 定义每个特征层的空间尺寸
+    input_spatial_shapes = torch.tensor([[50, 50], [25, 25], [13, 13], [7, 7]], dtype=torch.long).cuda()
+    
+    # 计算每层的起始索引和总长度
+    level_sizes = (input_spatial_shapes[:, 0] * input_spatial_shapes[:, 1]).tolist()
+    input_level_start_index = torch.tensor([0] + level_sizes[:-1], dtype=torch.long).cumsum(0).cuda()
+    total_len = sum(level_sizes)
+    
+    # 创建输入张量
     query = torch.randn(batch_size, num_queries, d_model).cuda()
     reference_points = torch.rand(batch_size, num_queries, n_levels, 2).cuda()
-    input_flatten = torch.randn(batch_size, num_queries, d_model).cuda()
-    input_spatial_shapes = torch.tensor([[50, 50], [25, 25], [13, 13], [7, 7]], dtype=torch.long).cuda()
-    input_level_start_index = torch.tensor([0, 2500, 3125, 3294], dtype=torch.long).cuda()
+    input_flatten = torch.randn(batch_size, total_len, d_model).cuda()  # 注意：长度是 total_len
     
     # 前向传播
     with torch.no_grad():
@@ -108,8 +115,11 @@ try:
         )
     
     print(f"   ✅ 前向传播成功")
-    print(f"      输入形状: {query.shape}")
+    print(f"      query 形状: {query.shape}")
+    print(f"      input_flatten 形状: {input_flatten.shape}")
     print(f"      输出形状: {output.shape}")
+    print(f"      空间尺寸: {input_spatial_shapes.tolist()}")
+    print(f"      总位置数: {total_len}")
     
 except Exception as e:
     print(f"   ❌ 前向传播失败: {e}")
