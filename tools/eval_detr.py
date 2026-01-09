@@ -21,7 +21,7 @@ project_root = Path(__file__).parent.parent
 sys.path.insert(0, str(project_root))
 
 from dataset import build_dataloader
-from models import build_model, build_image_processor
+from models import build_detr_model
 from utils import load_checkpoint, setup_logger
 
 
@@ -59,9 +59,12 @@ def evaluate(model, dataloader, device, coco_gt, logger, score_threshold=0.05, i
     if image_processor is None:
         if config is None:
             raise ValueError("当image_processor=None时，必须提供config参数")
-        # 使用统一接口，自动根据 model.type 选择对应的处理器
-        logger.info(f"初始化图像处理器: {config['model'].get('type', 'detr')}")
-        image_processor = build_image_processor(config)
+        # 从配置中读取模型名称，保持与模型一致
+        model_name = config['model']['name']
+        if not model_name.startswith('facebook/'):
+            model_name = f"facebook/{model_name}"
+        logger.info(f"初始化DetrImageProcessor: {model_name}")
+        image_processor = DetrImageProcessor.from_pretrained(model_name)
     
     for images, targets in tqdm(dataloader, desc="Evaluating"):
         # images是PIL.Image列表，targets是COCO格式字典列表
@@ -191,9 +194,7 @@ def main():
     
     # 构建模型
     print("\n🏗️  构建模型")
-    model_type = config['model'].get('type', 'detr')
-    print(f"模型类型: {model_type}")
-    model = build_model(config)
+    model = build_detr_model(config)
     model = model.to(device)
     
     # 加载checkpoint
