@@ -1,0 +1,100 @@
+# BDD100K + Deformable DETR 正式基线（P0）
+
+dataset:
+  name: "bdd100k_traffic"
+  type: "coco"
+  root_dir: "data/traffic_coco/bdd100k_det"
+  num_classes: 3
+  train_img: "images/train"
+  train_ann: "annotations/instances_train.json"
+  val_img: "images/val"
+  val_ann: "annotations/instances_val.json"
+  augmentation:
+    train_scales: [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
+    crop_resize_scales: [400, 500, 600]
+    crop_min_size: 384
+    crop_max_size: 600
+    train_max_size: 1333
+    eval_short_edge: 800
+    eval_max_size: 1333
+
+model:
+  type: "deformable_detr"
+  name: "deformable-detr"
+  backbone: "resnet50"
+  dilation: false
+  position_embedding: "sine"
+  position_embedding_scale: 6.283185307179586
+  num_feature_levels: 4
+  hidden_dim: 256
+  nheads: 8
+  enc_layers: 6
+  dec_layers: 6
+  dim_feedforward: 1024
+  dropout: 0.1
+  num_queries: 300
+  dec_n_points: 4
+  enc_n_points: 4
+  two_stage: false
+  with_box_refine: false
+  aux_loss: true
+  pretrained: true
+  pretrained_path: "weights/r50_deformable_detr.pth"
+  loss_weights:
+    class_loss_coef: 2.0
+    bbox_loss_coef: 5.0
+    giou_loss_coef: 2.0
+    focal_alpha: 0.25
+  set_cost_class: 2.0
+  set_cost_bbox: 5.0
+  set_cost_giou: 2.0
+
+training:
+  batch_size: 4
+  grad_accum_steps: 2
+  num_workers: 8
+  prefetch_factor: 2
+  max_epochs: 50
+  max_iters: null
+  optimizer:
+    type: "AdamW"
+    lr: 0.0002
+    lr_backbone: 0.00002
+    lr_linear_proj_mult: 0.1
+    weight_decay: 0.0001
+    betas: [0.9, 0.999]
+  lr_scheduler:
+    type: "StepLR"
+    step_size: 40
+    gamma: 0.1
+    warmup_epochs: 2
+    warmup_start_factor: 0.2
+  clip_max_norm: 0.1
+  save_interval: 5
+  eval_interval: 5
+  log_interval: 50
+  resume: null
+  amp: true
+  subset_size: null
+  subset_seed: 42
+  overfit: false
+  compile: false
+
+validation:
+  batch_size: 4
+  num_workers: 4
+  prefetch_factor: 2
+
+testing:
+  batch_size: 1
+  confidence_threshold: 0.05
+  nms_threshold: 0.5
+
+device:
+  type: "cuda"
+
+output:
+  base_dir: "outputs"
+  experiment_name: "deformable_bdd100k_p0"
+
+seed: 42

@@ -32,6 +32,14 @@ def _import_deformable_utils():
     return _deformable_utils_cache
 
 
+def _get_train_hparams(config):
+    """提取训练循环需要的通用超参数。"""
+    train_config = config.get('training', {})
+    grad_accum = int(train_config.get('grad_accum_steps', train_config.get('grad_accum', 1)) or 1)
+    clip_max_norm = train_config.get('clip_max_norm', 0.1)
+    return max(1, grad_accum), clip_max_norm
+
+
 def train_one_epoch_detr(model, dataloader, optimizer, device, epoch, logger, 
                          log_interval=50, max_iters=None, use_amp=False, scaler=None, amp_dtype=torch.float16):
     """
@@ -56,8 +64,10 @@ def train_one_epoch_detr(model, dataloader, optimizer, device, epoch, logger,
     model.train()
     epoch_loss = 0.0
     num_batches = 0
+    grad_accum, clip_max_norm = _get_train_hparams(getattr(model, 'config', {}))
     
     pbar = tqdm(dataloader, desc=f"Epoch {epoch} (DETR-HF)", ncols=100)
+    optimizer.zero_grad(set_to_none=True)
     
     for batch_idx, batch in enumerate(pbar):
         pixel_values = batch['pixel_values'].to(device)
@@ -77,42 +87,64 @@ def train_one_epoch_detr(model, dataloader, optimizer, device, epoch, logger,
         if use_amp:
             with autocast('cuda', dtype=amp_dtype):
                 outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
-                loss = outputs.loss
+                raw_loss = outputs.loss
         else:
             outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
-            loss = outputs.loss
+            raw_loss = outputs.loss
+        
+        loss = raw_loss / grad_accum if grad_accum > 1 else raw_loss
         
         # 反向传播
-        optimizer.zero_grad()
         if use_amp and scaler is not None:
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-            scaler.step(optimizer)
-            scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-            optimizer.step()
+        
+        should_step = ((batch_idx + 1) % grad_accum == 0)
+        if should_step:
+            if use_amp and scaler is not None:
+                if clip_max_norm is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                if clip_max_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
         
         # 记录
-        epoch_loss += loss.item()
+        epoch_loss += raw_loss.item()
         num_batches += 1
         
         pbar.set_postfix({
-            'loss': f"{loss.item():.4f}",
+            'loss': f"{raw_loss.item():.4f}",
             'avg': f"{epoch_loss / num_batches:.4f}"
         })
         
         if (batch_idx + 1) % log_interval == 0:
             logger.info(
                 f"Epoch [{epoch}] Iter [{batch_idx + 1}/{len(dataloader)}] "
-                f"Loss: {loss.item():.4f} Avg: {epoch_loss / num_batches:.4f}"
+                f"Loss: {raw_loss.item():.4f} Avg: {epoch_loss / num_batches:.4f}"
             )
         
         if max_iters and num_batches >= max_iters:
             logger.info(f"达到最大迭代数 {max_iters}")
             break
+    
+    if num_batches > 0 and num_batches % grad_accum != 0:
+        if use_amp and scaler is not None:
+            if clip_max_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            if clip_max_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+            optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
     
     return epoch_loss / num_batches if num_batches > 0 else 0.0
 
@@ -145,8 +177,10 @@ def train_one_epoch_deformable(model, dataloader, optimizer, device, epoch, logg
     model.train()
     epoch_loss = 0.0
     num_batches = 0
+    grad_accum, clip_max_norm = _get_train_hparams(getattr(model, 'config', {}))
     
     pbar = tqdm(dataloader, desc=f"Epoch {epoch} (Deformable)", ncols=100)
+    optimizer.zero_grad(set_to_none=True)
     
     for batch_idx, (samples, targets) in enumerate(pbar):
         # 将数据移到设备
@@ -165,31 +199,40 @@ def train_one_epoch_deformable(model, dataloader, optimizer, device, epoch, logg
                 # 应用 weight_dict（与官方实现一致）
                 # SetCriterion 返回未加权的 loss，需要手动应用 weight_dict
                 weight_dict = model.criterion.weight_dict
-                loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+                raw_loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
         else:
             loss_dict = model(samples, targets)
             weight_dict = model.criterion.weight_dict
-            loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+            raw_loss = sum(loss_dict[k] * weight_dict[k] for k in loss_dict.keys() if k in weight_dict)
+        
+        loss = raw_loss / grad_accum if grad_accum > 1 else raw_loss
         
         # 反向传播
-        optimizer.zero_grad()
         if use_amp and scaler is not None:
             scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-            scaler.step(optimizer)
-            scaler.update()
         else:
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
-            optimizer.step()
+        
+        should_step = ((batch_idx + 1) % grad_accum == 0)
+        if should_step:
+            if use_amp and scaler is not None:
+                if clip_max_norm is not None:
+                    scaler.unscale_(optimizer)
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                if clip_max_norm is not None:
+                    torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+                optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
         
         # 记录
-        epoch_loss += loss.item()
+        epoch_loss += raw_loss.item()
         num_batches += 1
         
         # 显示关键损失
-        loss_str = f"loss={loss.item():.3f}"
+        loss_str = f"loss={raw_loss.item():.3f}"
         if 'loss_ce' in loss_dict:
             loss_str += f" ce={loss_dict['loss_ce'].item():.3f}"
         if 'loss_bbox' in loss_dict:
@@ -208,6 +251,19 @@ def train_one_epoch_deformable(model, dataloader, optimizer, device, epoch, logg
             logger.info(f"达到最大迭代数 {max_iters}")
             break
     
+    if num_batches > 0 and num_batches % grad_accum != 0:
+        if use_amp and scaler is not None:
+            if clip_max_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            if clip_max_norm is not None:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip_max_norm)
+            optimizer.step()
+        optimizer.zero_grad(set_to_none=True)
+    
     return epoch_loss / num_batches if num_batches > 0 else 0.0
 
 
@@ -221,6 +277,7 @@ def train_one_epoch(model, dataloader, optimizer, device, epoch, logger, config,
     - 'deformable_detr': 使用官方数据流
     """
     model_type = config.get('model', {}).get('type', 'detr').lower()
+    model.config = config
     
     if model_type == 'deformable_detr' or model_type == 'deformable-detr':
         return train_one_epoch_deformable(

@@ -118,6 +118,7 @@ class DeformableDETRModelWrapper(nn.Module):
         
         # 使用官方 build 逻辑
         self.model, self.criterion, self.postprocessors = self._build_official(args)
+        self._maybe_load_pretrained(config)
         
         print(f"✅ Deformable DETR 模型创建成功")
         print(f"   - 类别数: {args.num_classes}")
@@ -125,6 +126,58 @@ class DeformableDETRModelWrapper(nn.Module):
         print(f"   - 特征层级: {args.num_feature_levels}")
         print(f"   - 两阶段: {args.two_stage}")
         print(f"   - Box Refine: {args.with_box_refine}")
+    
+    def _resolve_pretrained_path(self, config: dict):
+        model_config = config.get('model', {})
+        explicit_path = model_config.get('pretrained_path')
+        if explicit_path:
+            return Path(explicit_path)
+        
+        candidate = Path(__file__).parent.parent / "weights" / "r50_deformable_detr.pth"
+        if candidate.exists() and model_config.get('backbone', 'resnet50') == 'resnet50':
+            return candidate
+        return None
+    
+    def _maybe_load_pretrained(self, config: dict):
+        """加载官方预训练权重，自动跳过类别头等形状不匹配参数。"""
+        model_config = config.get('model', {})
+        if not model_config.get('pretrained', False):
+            return
+        
+        pretrained_path = self._resolve_pretrained_path(config)
+        if pretrained_path is None or not pretrained_path.exists():
+            print("⚠️  未找到 Deformable DETR 预训练权重，继续使用默认初始化")
+            return
+        
+        print(f"🔄 加载 Deformable DETR 预训练权重: {pretrained_path}")
+        checkpoint = torch.load(pretrained_path, map_location='cpu')
+        state_dict = checkpoint.get('model', checkpoint.get('state_dict', checkpoint))
+        
+        if not isinstance(state_dict, dict):
+            print("⚠️  预训练权重格式不正确，跳过加载")
+            return
+        
+        model_state = self.model.state_dict()
+        filtered_state_dict = {}
+        skipped_keys = []
+        
+        for key, value in state_dict.items():
+            normalized_key = key[7:] if key.startswith('module.') else key
+            if normalized_key not in model_state:
+                continue
+            if model_state[normalized_key].shape != value.shape:
+                skipped_keys.append(normalized_key)
+                continue
+            filtered_state_dict[normalized_key] = value
+        
+        missing_keys, unexpected_keys = self.model.load_state_dict(filtered_state_dict, strict=False)
+        print(f"✅ 已加载 {len(filtered_state_dict)} 个预训练参数")
+        if skipped_keys:
+            print(f"   - 跳过形状不匹配参数: {len(skipped_keys)} 个")
+        if missing_keys:
+            print(f"   - 模型中未被覆盖参数: {len(missing_keys)} 个")
+        if unexpected_keys:
+            print(f"   - 权重中未使用参数: {len(unexpected_keys)} 个")
         
     def _build_args(self, config):
         """构建官方格式的 args 对象"""
@@ -255,7 +308,7 @@ class DeformableDETRModelWrapper(nn.Module):
         
         return model, criterion, postprocessors
     
-    def forward(self, samples, targets=None):
+    def forward(self, samples, targets=None, warm_ref_points=None):
         """
         前向传播（官方格式）
         
@@ -279,7 +332,7 @@ class DeformableDETRModelWrapper(nn.Module):
             samples = nested_tensor_from_tensor_list(samples)
         
         # 前向传播
-        outputs = self.model(samples)
+        outputs = self.model(samples, warm_ref_points=warm_ref_points)
         
         if targets is not None:
             # 训练模式：计算损失
@@ -314,3 +367,33 @@ def build_deformable_detr_model(config: dict) -> nn.Module:
         DeformableDETRModelWrapper 实例
     """
     return DeformableDETRModelWrapper(config)
+
+
+def post_process_deformable_detr(outputs, target_sizes, threshold=0.5):
+    """
+    Convenience post-process helper for inference scripts.
+
+    Args:
+        outputs: dict with pred_logits/pred_boxes
+        target_sizes: Tensor [B, 2] (H, W)
+        threshold: score threshold
+
+    Returns:
+        List[Dict] with scores, labels, boxes.
+    """
+    postprocessor = PostProcess()
+    results = postprocessor(outputs, target_sizes)
+    if threshold is None:
+        return results
+    filtered = []
+    for res in results:
+        scores = res["scores"]
+        keep = scores >= threshold
+        filtered.append(
+            {
+                "scores": scores[keep],
+                "labels": res["labels"][keep],
+                "boxes": res["boxes"][keep],
+            }
+        )
+    return filtered

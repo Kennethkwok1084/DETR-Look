@@ -123,7 +123,26 @@ class DeformableTransformer(nn.Module):
         valid_ratio = torch.stack([valid_ratio_w, valid_ratio_h], -1)
         return valid_ratio
 
-    def forward(self, srcs, masks, pos_embeds, query_embed=None):
+    def _apply_warm_ref_points(self, reference_points, warm_ref_points, eps=1e-4):
+        if warm_ref_points is None:
+            return reference_points
+        if warm_ref_points.dim() == 2:
+            warm_ref_points = warm_ref_points.unsqueeze(0)
+        if warm_ref_points.dim() != 3:
+            return reference_points
+        if warm_ref_points.size(0) == 1 and reference_points.size(0) > 1:
+            warm_ref_points = warm_ref_points.expand(reference_points.size(0), -1, -1)
+        if warm_ref_points.size(0) != reference_points.size(0):
+            return reference_points
+        warm_ref_points = warm_ref_points.to(device=reference_points.device, dtype=reference_points.dtype)
+        k = min(reference_points.size(1), warm_ref_points.size(1))
+        if k <= 0:
+            return reference_points
+        reference_points = reference_points.clone()
+        reference_points[:, :k, :2] = warm_ref_points[:, :k, :2].clamp(eps, 1 - eps)
+        return reference_points
+
+    def forward(self, srcs, masks, pos_embeds, query_embed=None, warm_ref_points=None):
         assert self.two_stage or query_embed is not None
 
         # prepare input for encoder
@@ -166,7 +185,6 @@ class DeformableTransformer(nn.Module):
             topk_coords_unact = torch.gather(enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4))
             topk_coords_unact = topk_coords_unact.detach()
             reference_points = topk_coords_unact.sigmoid()
-            init_reference_out = reference_points
             pos_trans_out = self.pos_trans_norm(self.pos_trans(self.get_proposal_pos_embed(topk_coords_unact)))
             query_embed, tgt = torch.split(pos_trans_out, c, dim=2)
         else:
@@ -174,7 +192,9 @@ class DeformableTransformer(nn.Module):
             query_embed = query_embed.unsqueeze(0).expand(bs, -1, -1)
             tgt = tgt.unsqueeze(0).expand(bs, -1, -1)
             reference_points = self.reference_points(query_embed).sigmoid()
-            init_reference_out = reference_points
+
+        reference_points = self._apply_warm_ref_points(reference_points, warm_ref_points)
+        init_reference_out = reference_points
 
         # decoder
         hs, inter_references = self.decoder(tgt, reference_points, memory,
@@ -390,5 +410,4 @@ def build_deforamble_transformer(args):
         enc_n_points=args.enc_n_points,
         two_stage=args.two_stage,
         two_stage_num_proposals=args.num_queries)
-
 

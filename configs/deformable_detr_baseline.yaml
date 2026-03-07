@@ -5,14 +5,22 @@
 dataset:
   name: "bdd100k_traffic"
   type: "coco"
+  root_dir: "data/traffic_coco/bdd100k_det"
   num_classes: 3  # vehicle, traffic_sign, traffic_light
   
-  # 路径配置（支持两种方式）
-  # 方式1: 直接指定 train_img/val_img
-  train_img: "data/traffic_coco/train"
-  train_ann: "data/traffic_coco/annotations/instances_train.json"
-  val_img: "data/traffic_coco/val"
-  val_ann: "data/traffic_coco/annotations/instances_val.json"
+  train_img: "images/train"
+  train_ann: "annotations/instances_train.json"
+  val_img: "images/val"
+  val_ann: "annotations/instances_val.json"
+
+  augmentation:
+    train_scales: [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
+    crop_resize_scales: [400, 500, 600]
+    crop_min_size: 384
+    crop_max_size: 600
+    train_max_size: 1333
+    eval_short_edge: 800
+    eval_max_size: 1333
 
 # 模型配置
 model:
@@ -45,7 +53,8 @@ model:
   
   # 训练相关
   aux_loss: true  # 辅助损失（中间层监督）
-  pretrained: false  # 是否使用预训练权重（官方实现需手动下载）
+  pretrained: true
+  pretrained_path: "weights/r50_deformable_detr.pth"
   
   # 损失权重
   loss_weights:
@@ -70,6 +79,8 @@ training:
   optimizer:
     type: "AdamW"
     lr: 0.0002  # Deformable DETR通常用稍高学习率
+    lr_backbone: 0.00002
+    lr_linear_proj_mult: 0.1
     weight_decay: 0.0001
     betas: [0.9, 0.999]
   
@@ -78,6 +89,8 @@ training:
     type: "StepLR"
     step_size: 40
     gamma: 0.1
+    warmup_epochs: 2
+    warmup_start_factor: 0.2
   
   # 梯度裁剪
   clip_max_norm: 0.1
@@ -94,6 +107,7 @@ training:
   
   # AMP 混合精度
   amp: false  # 启用自动混合精度训练（推荐GPU训练时开启）
+  grad_accum_steps: 1
   
   # 子集采样（用于快速验证或预算搜索）
   subset_size: null  # 子集大小，null表示使用全量数据
@@ -113,6 +127,7 @@ training:
 validation:
   batch_size: 2
   num_workers: 4
+  prefetch_factor: 2
   
 # 测试配置
 testing:
@@ -128,3 +143,5 @@ device:
 output:
   base_dir: "outputs"
   experiment_name: "deformable_detr_baseline"
+
+seed: 42

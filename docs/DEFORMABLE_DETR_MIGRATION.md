@@ -225,6 +225,77 @@ model:
 6) 优化脚本改造：`tools/train_detr_optimized.py` 或新增 Deformable 版本  
 7) 新增配置样例与文档更新
 
+## 第 4-5 章补充：跨帧 warm-start + ByteTrack + 最小化数据产出
+
+目标：在不训练自有模型的前提下，补齐跨帧信息利用与在线关联的实现闭环，并给出最小可交付的定量/定性结果。
+
+### 4.x 跨帧 warm-start 的最小实现
+
+核心思路：推理时用上一帧的高置信检测结果，替换 Deformable DETR 的初始 reference points 前 K 个。
+
+最小缓存字段：
+
+- `ref_points_prev`: 上一帧 top-K 的 `(cx, cy)`，归一化到 [0, 1]
+- `scores_prev`: 置信度
+- 可选 `wh_prev`: `(w, h)`，如需更强引导
+
+选择规则：
+
+- score 排序 + `score > tau` 过滤
+- 最多取 K（建议 K=30 或 50，tau=0.5）
+
+替换逻辑：
+
+- 在模型 forward 里获取 `init_reference`（形状 `[B, num_queries, 2/4]`）
+- 若有缓存，则替换前 K 个：
+  - `init_reference[:, :K, :2] = ref_points_prev`
+- 数值安全：`clamp` 到 `[eps, 1-eps]`
+- 若无有效缓存，则退化为 baseline
+
+推理主循环结构（用于流程图/方法描述）：
+
+```text
+for frame in video:
+  warm_ref = prev_ref_points if valid else None
+  outputs = model(frame, warm_ref_points=warm_ref)
+  dets = post_process(outputs)
+  prev_ref_points = topk_ref_points(dets)
+  tracks = bytetrack.update(dets)
+```
+
+### 4.y ByteTrack 在线关联接入
+
+输入输出约定（论文描述用）：
+
+- 输入 detections：`(x1, y1, x2, y2, score, cls)`
+- 输出 tracks：`(x1, y1, x2, y2, track_id, cls, score)`
+
+工程建议：
+
+- 先按 `cls` 分组做 tracking，减少跨类误匹配导致的 IDSW
+- 每类独立 tracker，最后合并输出
+
+### 5.x 最小、最快速、最稳定的数据产出路径（无自训）
+
+原则：不训练，只做推理 + 跟踪 + 轻量评测，优先使用已有公开的 tracking 标注集。
+
+推荐路径（最小成本）：
+
+1) 模型：直接用预训练 Deformable DETR 权重（例如 `SenseTime/deformable-detr`）
+2) 数据：BDD100K tracking 的 val 子集（带 GT track id）
+3) 子集规模：3-5 段短序列（每段 200-300 帧），控制时长与稳定性
+4) 评测：用 ByteTrack 输出轨迹，计算 IDSW/Frag（可选 IDF1/HOTA）
+5) 对比：同一子集跑 baseline vs warm-start
+
+最小交付物清单（第 5 章闭环）：
+
+- 表 1：消融表（Baseline vs Warm-start）
+  - IDSW, Frag, FPS（可选 IDF1/HOTA）
+- 图 1：系统流程图（检测 + warm-start + ByteTrack + 输出）
+- 图 2：定性对比拼图（2 组场景，baseline vs ours）
+
+如果无法引入 tracking 子集，可用 2-3 段人工标注的短视频做定性+弱量化，但该方案仅作备选。
+
 ## 验收与验证
 
 - 冒烟测试：小子集训练 1 个 epoch，loss 正常下降

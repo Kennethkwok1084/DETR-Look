@@ -6,8 +6,9 @@ Deformable DETR 数据集适配器
 
 import sys
 from pathlib import Path
+import random
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 from PIL import Image
 import numpy as np
 
@@ -75,17 +76,24 @@ def make_deformable_transforms(image_set, config):
         T.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
     ])
 
-    scales = [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800]
+    aug_config = config.get('dataset', {}).get('augmentation', {})
+    scales = aug_config.get('train_scales', [480, 512, 544, 576, 608, 640, 672, 704, 736, 768, 800])
+    crop_resize_scales = aug_config.get('crop_resize_scales', [400, 500, 600])
+    crop_min_size = int(aug_config.get('crop_min_size', 384))
+    crop_max_size = int(aug_config.get('crop_max_size', 600))
+    train_max_size = int(aug_config.get('train_max_size', 1333))
+    eval_short_edge = int(aug_config.get('eval_short_edge', 800))
+    eval_max_size = int(aug_config.get('eval_max_size', train_max_size))
 
     if image_set == 'train':
         return T.Compose([
             T.RandomHorizontalFlip(),
             T.RandomSelect(
-                T.RandomResize(scales, max_size=1333),
+                T.RandomResize(scales, max_size=train_max_size),
                 T.Compose([
-                    T.RandomResize([400, 500, 600]),
-                    T.RandomSizeCrop(384, 600),
-                    T.RandomResize(scales, max_size=1333),
+                    T.RandomResize(crop_resize_scales),
+                    T.RandomSizeCrop(crop_min_size, crop_max_size),
+                    T.RandomResize(scales, max_size=train_max_size),
                 ])
             ),
             normalize,
@@ -93,7 +101,7 @@ def make_deformable_transforms(image_set, config):
 
     if image_set == 'val':
         return T.Compose([
-            T.RandomResize([800], max_size=1333),
+            T.RandomResize([eval_short_edge], max_size=eval_max_size),
             normalize,
         ])
 
@@ -231,6 +239,7 @@ def build_deformable_dataloader(config, image_set='train'):
     """
     dataset_config = config['dataset']
     train_config = config['training']
+    val_config = config.get('validation', {})
     
     if image_set == 'train':
         # 支持两种配置方式：train_img 或 root_dir + images/train
@@ -238,6 +247,8 @@ def build_deformable_dataloader(config, image_set='train'):
         if not img_folder:
             root_dir = dataset_config.get('root_dir', 'data')
             img_folder = str(Path(root_dir) / 'images' / 'train')
+        elif not Path(img_folder).is_absolute() and dataset_config.get('root_dir'):
+            img_folder = str(Path(dataset_config['root_dir']) / img_folder)
         
         ann_file = dataset_config['train_ann']
         # 如果 ann_file 是相对路径，拼接 root_dir
@@ -250,6 +261,8 @@ def build_deformable_dataloader(config, image_set='train'):
         if not img_folder:
             root_dir = dataset_config.get('root_dir', 'data')
             img_folder = str(Path(root_dir) / 'images' / 'val')
+        elif not Path(img_folder).is_absolute() and dataset_config.get('root_dir'):
+            img_folder = str(Path(dataset_config['root_dir']) / img_folder)
         
         ann_file = dataset_config['val_ann']
         ann_file = Path(ann_file)
@@ -267,19 +280,50 @@ def build_deformable_dataloader(config, image_set='train'):
         transforms=transforms,
         return_masks=False
     )
+
+    subset_size = train_config.get('subset_size')
+    overfit_mode = train_config.get('overfit', False)
+    if image_set == 'train' and subset_size:
+        subset_seed = train_config.get('subset_seed', 42)
+        random.seed(subset_seed)
+        sample_size = min(int(subset_size), len(dataset))
+
+        if overfit_mode:
+            indices = list(range(sample_size))
+        else:
+            indices = random.sample(range(len(dataset)), sample_size)
+
+        dataset = Subset(dataset, indices)
+        print(f"📌 Deformable {image_set} 子集: {len(dataset)} / {sample_size} (seed={subset_seed})")
     
     # 创建 DataLoader
-    batch_size = train_config['batch_size'] if image_set == 'train' else 1
-    num_workers = train_config.get('num_workers', 4)
+    if image_set == 'train':
+        batch_size = train_config['batch_size']
+        num_workers = train_config.get('num_workers', 4)
+        shuffle = not overfit_mode
+    else:
+        batch_size = val_config.get('batch_size', train_config['batch_size'])
+        num_workers = val_config.get('num_workers', train_config.get('num_workers', 4))
+        shuffle = False
+    
+    prefetch_factor = None
+    if num_workers > 0:
+        prefetch_factor = (
+            train_config.get('prefetch_factor', 2)
+            if image_set == 'train'
+            else val_config.get('prefetch_factor', train_config.get('prefetch_factor', 2))
+        )
     
     dataloader = DataLoader(
         dataset,
         batch_size=batch_size,
-        shuffle=(image_set == 'train'),
+        shuffle=shuffle,
         num_workers=num_workers,
         collate_fn=collate_fn,  # 官方 collate_fn，生成 NestedTensor
         pin_memory=True,
-        drop_last=(image_set == 'train')
+        drop_last=(image_set == 'train' and not overfit_mode),
+        persistent_workers=num_workers > 0,
+        prefetch_factor=prefetch_factor if num_workers > 0 else None,
     )
     
     print(f"✅ Deformable DataLoader 创建成功 ({image_set})")
