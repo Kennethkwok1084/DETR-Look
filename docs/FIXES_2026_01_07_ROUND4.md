@@ -88,8 +88,8 @@ else:
 # 修复前
 def build_model(num_classes: int, pretrained: bool = True):
     if pretrained:
-        model = DetrForObjectDetection.from_pretrained(
-            "facebook/detr-resnet-50",
+        model = DeformableDetrForObjectDetection.from_pretrained(
+            "SenseTime/deformable-detr",
             num_labels=num_classes,
             ignore_mismatched_sizes=True,
         )
@@ -100,8 +100,8 @@ def build_model(num_classes: int, pretrained: bool = True, offline_mode: bool = 
     if pretrained:
         try:
             # 优先尝试本地缓存
-            model = DetrForObjectDetection.from_pretrained(
-                "facebook/detr-resnet-50",
+            model = DeformableDetrForObjectDetection.from_pretrained(
+                "SenseTime/deformable-detr",
                 num_labels=num_classes,
                 ignore_mismatched_sizes=True,
                 local_files_only=offline_mode,
@@ -110,24 +110,24 @@ def build_model(num_classes: int, pretrained: bool = True, offline_mode: bool = 
             if offline_mode:
                 print(f"⚠️  离线模式下无法加载预训练模型: {e}")
                 print("⚠️  将使用随机初始化模型")
-                config = DetrConfig(num_labels=num_classes, num_queries=100)
-                model = DetrForObjectDetection(config)
+                config = DeformableDetrConfig(num_labels=num_classes, num_queries=100)
+                model = DeformableDetrForObjectDetection(config)
             else:
                 # 非离线模式，允许下载
-                model = DetrForObjectDetection.from_pretrained(...)
+                model = DeformableDetrForObjectDetection.from_pretrained(...)
     # ...
 
 # evaluate() 中的 processor 也同样处理
 if processor is None:
     try:
-        processor = DetrImageProcessor.from_pretrained(
-            "facebook/detr-resnet-50",
+        processor = DeformableDetrImageProcessor.from_pretrained(
+            "SenseTime/deformable-detr",
             local_files_only=True
         )
     except Exception as e:
         if offline_mode:
-            raise RuntimeError(f"离线模式下无法加载 DetrImageProcessor，请先缓存模型: {e}")
-        processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+            raise RuntimeError(f"离线模式下无法加载 DeformableDetrImageProcessor，请先缓存模型: {e}")
+        processor = DeformableDetrImageProcessor.from_pretrained("SenseTime/deformable-detr")
 ```
 
 ### 4. 置信度阈值不可调（低）
@@ -187,7 +187,7 @@ python tools/train_detr_optimized.py \
 # 为什么需要 clamp？
 # 1. 标注工具可能产生越界框（x < 0 或 x > width）
 # 2. resize 过程中的浮点误差可能导致 > 1.0
-# 3. DETR loss 计算假设坐标在 [0, 1] 范围内
+# 3. Deformable DETR loss 计算假设坐标在 [0, 1] 范围内
 
 # 示例：越界标注
 # 原始标注：bbox = [0, 0, 1290, 720]（图像宽1280）
@@ -215,9 +215,9 @@ python tools/train_detr_optimized.py \
 ```python
 # 场景 1：预先缓存（推荐）
 # 在有网络的机器上运行一次：
-python -c "from transformers import DetrForObjectDetection, DetrImageProcessor; \
-DetrForObjectDetection.from_pretrained('facebook/detr-resnet-50'); \
-DetrImageProcessor.from_pretrained('facebook/detr-resnet-50')"
+python -c "from transformers import DeformableDetrForObjectDetection, DeformableDetrImageProcessor; \
+DeformableDetrForObjectDetection.from_pretrained('SenseTime/deformable-detr'); \
+DeformableDetrImageProcessor.from_pretrained('SenseTime/deformable-detr')"
 
 # 场景 2：离线训练
 python tools/train_detr_optimized.py \
@@ -293,7 +293,7 @@ $ python tools/verify_all_fixes.py
 ## 完整修复清单（全部四轮）
 
 ### 第一轮（初始实现）
-1. ✅ DETR 标准归一化
+1. ✅ Deformable DETR 标准归一化
 2. ✅ Bbox 归一化 cxcywh
 3. ✅ 官方 post_process
 4. ✅ 参数名修复

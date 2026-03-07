@@ -7,7 +7,7 @@
 
 ### 1. ✅ Progressive Resizing 使用正确的参数格式
 
-**问题**：`image_processor.size = {'height': ..., 'width': ...}` 不符合 HF DetrImageProcessor 期望的格式。
+**问题**：`image_processor.size = {'height': ..., 'width': ...}` 不符合 HF DeformableDetrImageProcessor 期望的格式。
 
 **修复**：
 ```python
@@ -20,7 +20,7 @@ image_processor.size = {"shortest_edge": current_size, "longest_edge": current_s
 
 **影响文件**：`tools/train_detr.py`
 
-**说明**：HuggingFace DETR 的 ImageProcessor 使用 `shortest_edge` 和 `longest_edge` 参数控制尺寸，现在可以正确应用 Progressive Resizing。
+**说明**：HuggingFace Deformable DETR 的 ImageProcessor 使用 `shortest_edge` 和 `longest_edge` 参数控制尺寸，现在可以正确应用 Progressive Resizing。
 
 ---
 

@@ -1,4 +1,4 @@
-# DETR交通分析系统 - 实现总结
+# Deformable DETR交通分析系统 - 实现总结
 
 ## 📦 已交付内容
 
@@ -11,7 +11,7 @@
 - **collate_fn**: 自定义batch整合函数
 
 #### 模型模块 (`models/`)
-- **DETRModel**: 封装transformers的DETR模型
+- **DETRModel**: 封装transformers的Deformable DETR模型
 - **build_detr_model**: 模型构建接口
 - 支持加载预训练权重
 - 自动适配自定义类别数
@@ -46,7 +46,7 @@
 ### 为什么选择 Hugging Face transformers？
 
 1. **快速集成**: 
-   - 提供预训练DETR模型，无需从头训练
+   - 提供预训练Deformable DETR模型，无需从头训练
    - 已包含完整的损失函数和训练逻辑
    - 减少实现复杂度
 
@@ -66,7 +66,7 @@
 ```python
 1. 加载COCO数据 → Dataset
 2. 构建DataLoader → batch化
-3. 初始化DETR模型 → 加载预训练权重
+3. 初始化Deformable DETR模型 → 加载预训练权重
 4. 训练循环:
    for epoch in epochs:
        for batch in dataloader:
@@ -131,7 +131,7 @@
 ## 📈 预期性能指标
 
 ### 检测指标（参考值）
-基于DETR在COCO数据集的表现，调整到我们的场景：
+基于Deformable DETR在COCO数据集的表现，调整到我们的场景：
 - **Baseline mAP**: 预计 30-40%
 - **AP_small**: 预计 15-25% (优化前)
 - **AP_small提升**: 目标 +5-10% (优化后)
@@ -172,7 +172,7 @@
 
 ### 模型架构
 ```
-DETR (Detection Transformer)
+Deformable DETR (Detection Transformer)
 ├── Backbone: ResNet-50
 ├── Encoder: 6层 Transformer
 ├── Decoder: 6层 Transformer
@@ -204,9 +204,9 @@ total_loss = class_loss * 1.0
 
 ## 📚 参考资源
 
-### DETR原理
+### Deformable DETR原理
 - 论文: "End-to-End Object Detection with Transformers"
-- Hugging Face文档: https://huggingface.co/docs/transformers/model_doc/detr
+- Hugging Face文档: https://huggingface.co/docs/transformers/model_doc/deformable_detr
 
 ### COCO评估
 - pycocotools文档: https://github.com/cocodataset/cocoapi
@@ -240,7 +240,7 @@ total_loss = class_loss * 1.0
 |------|------|------|
 | 数据准备 | ✅ 完成 | BDD100K和TT100K已转COCO格式 |
 | 数据加载 | ✅ 完成 | Dataset和DataLoader已实现 |
-| 模型集成 | ✅ 完成 | DETR模型已封装 |
+| 模型集成 | ✅ 完成 | Deformable DETR模型已封装 |
 | 训练框架 | ✅ 完成 | 训练循环已实现 |
 | 评估脚本 | ✅ 完成 | COCO评估已实现 |
 | 冒烟测试 | ⏳ 待执行 | 需GPU服务器验证 |

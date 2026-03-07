@@ -1,32 +1,32 @@
-# DETR 训练脚本说明
+# Deformable DETR 训练脚本说明
 
 ## ⚠️ 重要：当前环境状况
 
 **PyTorch 版本**: 2.9.1+cpu  
-**Torchvision 版本**: 0.24.1+cpu（**不包含 DETR**）  
+**Torchvision 版本**: 0.24.1+cpu（**不包含 Deformable DETR**）  
 **Transformers 版本**: 4.57.3
 
 ### 关键事实
 
-1. **torchvision 0.24.1+cpu 不包含 DETR 模型**
-   - 即使 torchvision >= 0.13 理论上应该有 `detr_resnet50`
-   - 经验证：`hasattr(torchvision.models.detection, 'detr_resnet50')` 返回 `False`
+1. **torchvision 0.24.1+cpu 不包含 Deformable DETR 模型**
+   - 即使 torchvision >= 0.13 理论上应该有 `deformable-detr`
+   - 经验证：`hasattr(torchvision.models.detection, 'deformable-detr')` 返回 `False`
    - 可能是 CPU 版本或特定构建的限制
 
-2. **当前使用 transformers DETR**
-   - `DetrForObjectDetection` 来自 HuggingFace transformers
+2. **当前使用 transformers Deformable DETR**
+   - `DeformableDetrForObjectDetection` 来自 HuggingFace transformers
    - 功能完整，性能良好
-   - 支持预训练权重 `facebook/detr-resnet-50`
+   - 支持预训练权重 `SenseTime/deformable-detr`
 
 3. **未来计划**
-   - 等 CUDA 环境就绪且 torchvision 包含 DETR 后
-   - 切换到纯 torchvision DETR 实现（主线）
+   - 等 CUDA 环境就绪且 torchvision 包含 Deformable DETR 后
+   - 切换到纯 torchvision Deformable DETR 实现（主线）
    - 保留 transformers 版本作为备选
 
 ## ✅ 可用脚本
 
 ### 1. **推荐：`train_detr_optimized.py`**
-完整的训练脚本（transformers DETR + 所有优化）
+完整的训练脚本（transformers Deformable DETR + 所有优化）
 
 ```bash
 python tools/train_detr_optimized.py \
@@ -42,9 +42,9 @@ python tools/train_detr_optimized.py \
 ```
 
 **✅ 已修复的问题**：
-- ✅ DETR 标准归一化（ImageNet mean/std）
-- ✅ 标签格式：归一化 cxcywh（DETR 要求）
-- ✅ 使用官方 `DetrImageProcessor.post_process_object_detection`
+- ✅ Deformable DETR 标准归一化（ImageNet mean/std）
+- ✅ 标签格式：归一化 cxcywh（Deformable DETR 要求）
+- ✅ 使用官方 `DeformableDetrImageProcessor.post_process_object_detection`
 - ✅ C++ 图像解码 + 优化 DataLoader
 - ✅ 完整训练/评估/checkpoint
 
@@ -52,7 +52,7 @@ python tools/train_detr_optimized.py \
 ⚠️ 已标记为 `.BROKEN`
 
 **原因**：
-- 构建 transformers DETR 但用 torchvision 接口调用
+- 构建 transformers Deformable DETR 但用 torchvision 接口调用
 - 会直接报错，不可运行
 
 **替代**：使用 `train_detr_optimized.py`
@@ -70,9 +70,9 @@ self.cat_id_map = {cat_id: i for i, cat_id in enumerate(cat_ids)}
 # 映射到连续 [0..N-1]
 ```
 
-### DETR 标签格式
+### Deformable DETR 标签格式
 
-transformers DETR 要求：
+transformers Deformable DETR 要求：
 - **图像归一化**：ImageNet mean/std
   ```python
   DETR_MEAN = [0.485, 0.456, 0.406]
@@ -89,15 +89,15 @@ transformers DETR 要求：
 
 ### 评估后处理
 
-使用官方 `DetrImageProcessor.post_process_object_detection`：
+使用官方 `DeformableDetrImageProcessor.post_process_object_detection`：
 - 正确处理 batch padding
 - 自动转换归一化坐标到像素坐标
 - 避免手工计算导致的精度问题
 
 ```python
-from transformers import DetrImageProcessor
+from transformers import DeformableDetrImageProcessor
 
-processor = DetrImageProcessor.from_pretrained("facebook/detr-resnet-50")
+processor = DeformableDetrImageProcessor.from_pretrained("SenseTime/deformable-detr")
 results = processor.post_process_object_detection(
     outputs, 
     threshold=0.05,
@@ -165,22 +165,22 @@ outputs/detr_optimized/
 
 ## 常见问题
 
-### Q: 为什么不用 torchvision DETR？
-A: 当前环境的 torchvision 0.24.1+cpu 不包含 DETR。transformers 实现功能完整且经过充分验证。
+### Q: 为什么不用 torchvision Deformable DETR？
+A: 当前环境的 torchvision 0.24.1+cpu 不包含 Deformable DETR。transformers 实现功能完整且经过充分验证。
 
 ### Q: 性能会受影响吗？
 A: 主要瓶颈在数据加载（已优化），模型forward差异不大。实测吞吐与 torchvision 版本接近。
 
-### Q: 可以切换到 torchvision DETR 吗？
-A: 如果升级到包含 DETR 的 torchvision 版本，可以使用 `train_detr_torchvision.py`（需适配数据格式）。
+### Q: 可以切换到 torchvision Deformable DETR 吗？
+A: 如果升级到包含 Deformable DETR 的 torchvision 版本，可以使用 `train_detr_torchvision.py`（需适配数据格式）。
 
 ### Q: 预训练权重在哪里？
-A: transformers 会自动从 HuggingFace 下载 `facebook/detr-resnet-50`。首次运行需联网。
+A: transformers 会自动从 HuggingFace 下载 `SenseTime/deformable-detr`。首次运行需联网。
 
 ### Q: 离线使用怎么办？
 A: 提前下载权重：
 ```bash
-python -c "from transformers import DetrForObjectDetection; DetrForObjectDetection.from_pretrained('facebook/detr-resnet-50')"
+python -c "from transformers import DeformableDetrForObjectDetection; DeformableDetrForObjectDetection.from_pretrained('SenseTime/deformable-detr')"
 ```
 
 ## 调试建议
@@ -203,10 +203,10 @@ print('Pixel values shape:', batch['pixel_values'].shape)
 ### 验证模型输入
 ```bash
 python -c "
-from transformers import DetrForObjectDetection
+from transformers import DeformableDetrForObjectDetection
 import torch
 
-model = DetrForObjectDetection.from_pretrained('facebook/detr-resnet-50', num_labels=3, ignore_mismatched_sizes=True)
+model = DeformableDetrForObjectDetection.from_pretrained('SenseTime/deformable-detr', num_labels=3, ignore_mismatched_sizes=True)
 pixel_values = torch.rand(2, 3, 800, 1066)
 pixel_mask = torch.ones(2, 800, 1066)
 outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask)

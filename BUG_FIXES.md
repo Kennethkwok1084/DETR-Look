@@ -1,6 +1,6 @@
 # Bug修复总结
 
-本文档总结了在DETR交通分析项目中发现并修复的所有bug。
+本文档总结了在Deformable DETR交通分析项目中发现并修复的所有bug。
 
 ## 修复概览
 
@@ -15,7 +15,7 @@
 
 ### 1. 错误的HuggingFace模型名称
 
-**问题**: 配置文件使用了错误的模型名 `"detr_resnet50"`，应该是 `"detr-resnet-50"`
+**问题**: 配置文件仍沿用标准 DETR 的模型名 `"detr-resnet-50"`，而 Deformable DETR 应使用 `"deformable-detr"`（HuggingFace: `"SenseTime/deformable-detr"`）
 
 **修复文件**:
 - [configs/detr_baseline.yaml](configs/detr_baseline.yaml#L23)
@@ -25,14 +25,14 @@
 ```yaml
 # 错误（修复前）
 model:
-  name: "detr_resnet50"
+  name: "detr-resnet-50"
 
 # 正确（修复后）
 model:
-  name: "detr-resnet-50"  # facebook/detr-resnet-50
+  name: "deformable-detr"  # SenseTime/deformable-detr
 ```
 
-**影响**: 如果不修复，`AutoModelForObjectDetection.from_pretrained()` 会失败
+**影响**: 如果不修复，模型会加载为标准 DETR，导致架构与训练目标不一致
 
 ---
 
@@ -59,7 +59,7 @@ def evaluate(model, dataloader, device, coco_gt, logger, score_threshold=0.05):
 
 ### 3. 缺少timm依赖
 
-**问题**: [requirements.txt](requirements.txt) 缺少 `timm` 包，而DETR模型需要它
+**问题**: [requirements.txt](requirements.txt) 缺少 `timm` 包，而Deformable DETR模型需要它
 
 **修复文件**:
 - [requirements.txt](requirements.txt)
@@ -196,19 +196,19 @@ def make_transforms(image_set, config):
         T.Normalize(mean, std)
     ])
     # 简化版transforms：只做归一化
-    # 因为DETR的transforms需要特殊处理（同时变换image和boxes）
+    # 因为Deformable DETR的transforms需要特殊处理（同时变换image和boxes）
     # 这里先实现最简版本
     return normalize
 ```
 
 **为什么暂不修复**:
-- DETR的数据增强需要同时变换图像和边界框
+- Deformable DETR的数据增强需要同时变换图像和边界框
 - 需要实现专门的transform类（类似torchvision的T.RandomHorizontalFlip但支持bbox）
 - 对于预训练模型微调，基础归一化已足够
 - 可以作为未来优化项
 
 **建议**: 如果后续需要更强的数据增强，可以参考：
-- [DETR官方transforms实现](https://github.com/facebookresearch/detr/blob/main/datasets/transforms.py)
+- [Deformable DETR官方transforms实现](https://github.com/fundamentalvision/Deformable-DETR/blob/main/datasets/transforms.py)
 - Albumentations库（支持bbox增强）
 
 ---
@@ -228,8 +228,8 @@ python tools/verify_fixes.py
 ============================================================
 
 1. ✅ 配置文件验证通过
-   - detr_baseline.yaml: model.name = 'detr-resnet-50'
-   - detr_smoke.yaml: model.name = 'detr-resnet-50'
+   - detr_baseline.yaml: model.name = 'deformable-detr'
+   - detr_smoke.yaml: model.name = 'deformable-detr'
    
 2. ✅ 依赖文件验证通过
    - requirements.txt 包含 timm
@@ -262,7 +262,7 @@ python tools/train_detr.py --config configs/detr_smoke.yaml
 ```
 
 **预期**:
-- 加载预训练DETR模型（facebook/detr-resnet-50）
+- 加载预训练Deformable DETR模型（SenseTime/deformable-detr）
 - 训练2个epoch，每个epoch最多100个iter
 - 每个epoch后运行验证（mAP计算）
 - 保存best.pth（基于mAP）和last.pth
@@ -303,8 +303,8 @@ python tools/eval_detr.py \
 
 | 文件 | 修改内容 |
 |------|----------|
-| [configs/detr_baseline.yaml](configs/detr_baseline.yaml) | 修正模型名为detr-resnet-50 |
-| [configs/detr_smoke.yaml](configs/detr_smoke.yaml) | 修正模型名为detr-resnet-50 |
+| [configs/detr_baseline.yaml](configs/detr_baseline.yaml) | 修正模型名为deformable-detr |
+| [configs/detr_smoke.yaml](configs/detr_smoke.yaml) | 修正模型名为deformable-detr |
 | [requirements.txt](requirements.txt) | 添加timm>=0.9.0 |
 | [dataset/coco_dataset.py](dataset/coco_dataset.py) | collate_fn返回列表支持可变尺寸 |
 | [tools/train_detr.py](tools/train_detr.py) | 1) 添加COCO/evaluate导入<br>2) 添加验证循环<br>3) 基于mAP保存最佳模型<br>4) 改进epoch停止逻辑<br>5) 添加torch.stack异常处理 |
@@ -323,7 +323,7 @@ python tools/eval_detr.py \
 2. **模型输入层面**: 
    - 优先尝试stack（所有图像相同尺寸时更高效）
    - 如果stack失败，保持列表形式
-   - DETR模型可以接受两种格式
+   - Deformable DETR模型可以接受两种格式
 
 **性能考虑**:
 - 相同尺寸batch: 使用stack，GPU并行效率高
@@ -340,6 +340,6 @@ python tools/eval_detr.py \
 
 ## 参考资料
 
-- [DETR官方实现](https://github.com/facebookresearch/detr)
-- [HuggingFace DETR文档](https://huggingface.co/docs/transformers/model_doc/detr)
+- [Deformable DETR官方实现](https://github.com/fundamentalvision/Deformable-DETR)
+- [HuggingFace Deformable DETR文档](https://huggingface.co/docs/transformers/model_doc/deformable_detr)
 - [COCO评估指南](https://cocodataset.org/#detection-eval)

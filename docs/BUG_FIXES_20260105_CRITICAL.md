@@ -185,7 +185,7 @@ def __init__(self, output_dir: Path, resume: bool = False):
 
 **问题描述**：
 - 原实现强制 `longest_edge = shortest_edge`，可能导致过度压缩
-- 无法保留 DETR 默认的长边上限 1333
+- 无法保留 Deformable DETR 默认的长边上限 1333
 
 **优化前**：
 ```python
@@ -206,7 +206,7 @@ if isinstance(current_size, dict):
 else:
     # 整数格式：短边为该值，长边使用默认上限
     shortest = current_size
-    longest = 1333  # DETR 默认上限
+    longest = 1333  # Deformable DETR 默认上限
 
 image_processor.size = {"shortest_edge": shortest, "longest_edge": longest}
 ```
