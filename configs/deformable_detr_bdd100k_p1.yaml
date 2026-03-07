@@ -10,12 +10,12 @@ dataset:
   val_img: "images/val"
   val_ann: "annotations/instances_val.json"
   augmentation:
-    train_scales: [544, 576, 608, 640, 672, 704, 736, 768, 800, 864, 928, 960]
-    crop_resize_scales: [500, 600, 700]
+    train_scales: [576, 608, 640, 672, 704, 736, 768, 800, 864, 928, 960, 1024]
+    crop_resize_scales: [600, 700, 800]
     crop_min_size: 480
-    crop_max_size: 720
+    crop_max_size: 800
     train_max_size: 1600
-    eval_short_edge: 960
+    eval_short_edge: 1024
     eval_max_size: 1600
 
 model:
@@ -54,7 +54,7 @@ training:
   grad_accum_steps: 2
   num_workers: 8
   prefetch_factor: 2
-  max_epochs: 50
+  max_epochs: 75
   max_iters: null
   optimizer:
     type: "AdamW"
@@ -65,9 +65,9 @@ training:
     betas: [0.9, 0.999]
   lr_scheduler:
     type: "StepLR"
-    step_size: 40
+    step_size: 55
     gamma: 0.1
-    warmup_epochs: 2
+    warmup_epochs: 5
     warmup_start_factor: 0.2
   clip_max_norm: 0.1
   save_interval: 5
@@ -95,6 +95,6 @@ device:
 
 output:
   base_dir: "outputs"
-  experiment_name: "deformable_bdd100k_p1"
+  experiment_name: "deformable_bdd100k_p1_accv1"
 
 seed: 42

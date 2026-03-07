@@ -245,6 +245,30 @@ def compute_coco_metrics(results, coco_gt, logger):
         'mAP_medium': coco_eval.stats[4],
         'mAP_large': coco_eval.stats[5],
     }
+
+    # 追加按类别 AP 指标，便于重点跟踪 traffic_sign AP
+    # precision: [TxRxKxAxM], area index: 0=all, 1=small, 2=medium, 3=large
+    precision = coco_eval.eval.get('precision')
+    params = coco_eval.params
+    if precision is not None:
+        cat_ids = params.catIds
+        area_idx_all = params.areaRngLbl.index('all') if 'all' in params.areaRngLbl else 0
+        area_idx_small = params.areaRngLbl.index('small') if 'small' in params.areaRngLbl else 1
+        max_det_idx = len(params.maxDets) - 1
+
+        for cat_pos, cat_id in enumerate(cat_ids):
+            cat_name = coco_gt.cats.get(cat_id, {}).get('name', str(cat_id))
+            metric_key = f"AP_{cat_name}"
+            metric_key_small = f"AP_small_{cat_name}"
+
+            p_all = precision[:, :, cat_pos, area_idx_all, max_det_idx]
+            p_small = precision[:, :, cat_pos, area_idx_small, max_det_idx]
+
+            valid_all = p_all[p_all > -1]
+            valid_small = p_small[p_small > -1]
+
+            metrics[metric_key] = float(valid_all.mean()) if valid_all.size > 0 else float('nan')
+            metrics[metric_key_small] = float(valid_small.mean()) if valid_small.size > 0 else float('nan')
     
     return metrics
 
