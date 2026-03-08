@@ -18,8 +18,8 @@
 **问题**: 配置文件仍沿用标准 DETR 的模型名 `"detr-resnet-50"`，而 Deformable DETR 应使用 `"deformable-detr"`（HuggingFace: `"SenseTime/deformable-detr"`）
 
 **修复文件**:
-- [configs/detr_baseline.yaml](configs/detr_baseline.yaml#L23)
-- [configs/detr_smoke.yaml](configs/detr_smoke.yaml#L23)
+- [configs/detr_baseline.yaml](../configs/detr_baseline.yaml#L23)
+- [configs/detr_smoke.yaml](../configs/detr_smoke.yaml#L23)
 
 **修复内容**:
 ```yaml
@@ -38,11 +38,11 @@ model:
 
 ### 2. 评估阈值硬编码为0.7导致结果清空
 
-**问题**: [tools/eval_detr.py](tools/eval_detr.py) 中硬编码 `score > 0.7` 过滤，导致大部分检测结果被清空，mAP计算无效
+**问题**: [tools/eval_detr.py](../tools/eval_detr.py) 中硬编码 `score > 0.7` 过滤，导致大部分检测结果被清空，mAP计算无效
 
 **修复文件**:
-- [tools/eval_detr.py](tools/eval_detr.py#L34)
-- [tools/eval_detr.py](tools/eval_detr.py#L103)
+- [tools/eval_detr.py](../tools/eval_detr.py#L34)
+- [tools/eval_detr.py](../tools/eval_detr.py#L103)
 
 **修复内容**:
 ```python
@@ -59,10 +59,10 @@ def evaluate(model, dataloader, device, coco_gt, logger, score_threshold=0.05):
 
 ### 3. 缺少timm依赖
 
-**问题**: [requirements.txt](requirements.txt) 缺少 `timm` 包，而Deformable DETR模型需要它
+**问题**: [requirements.txt](../requirements.txt) 缺少 `timm` 包，而Deformable DETR模型需要它
 
 **修复文件**:
-- [requirements.txt](requirements.txt)
+- [requirements.txt](../requirements.txt)
 
 **修复内容**:
 ```txt
@@ -81,9 +81,9 @@ timm>=0.9.0
 **问题**: BDD100K、TT100K、CCTSDB数据集图像尺寸不同，`torch.stack(images)` 会崩溃
 
 **修复文件**:
-- [dataset/coco_dataset.py](dataset/coco_dataset.py#L140) - collate_fn返回列表
-- [tools/train_detr.py](tools/train_detr.py#L76) - 添加try/except
-- [tools/eval_detr.py](tools/eval_detr.py#L56) - 添加try/except
+- [dataset/coco_dataset.py](../dataset/coco_dataset.py#L140) - collate_fn返回列表
+- [tools/train_detr.py](../tools/train_detr.py#L76) - 添加try/except
+- [tools/eval_detr.py](../tools/eval_detr.py#L56) - 添加try/except
 
 **修复内容**:
 ```python
@@ -110,8 +110,8 @@ except:
 **问题**: `val_loader` 被创建但从未使用，无法监控验证性能
 
 **修复文件**:
-- [tools/train_detr.py](tools/train_detr.py#L8) - 添加导入
-- [tools/train_detr.py](tools/train_detr.py#L235) - 添加验证循环
+- [tools/train_detr.py](../tools/train_detr.py#L8) - 添加导入
+- [tools/train_detr.py](../tools/train_detr.py#L235) - 添加验证循环
 
 **修复内容**:
 ```python
@@ -143,8 +143,8 @@ if current_map > best_map:
 ```
 
 **配置文件更新**:
-- [configs/detr_baseline.yaml](configs/detr_baseline.yaml#L67): `eval_interval: 1`
-- [configs/detr_smoke.yaml](configs/detr_smoke.yaml#L67): `eval_interval: 1`
+- [configs/detr_baseline.yaml](../configs/detr_baseline.yaml#L67): `eval_interval: 1`
+- [configs/detr_smoke.yaml](../configs/detr_smoke.yaml#L67): `eval_interval: 1`
 
 **影响**: 
 - 现在可以监控验证性能
@@ -158,7 +158,7 @@ if current_map > best_map:
 **问题**: 即使设置了max_iters用于部分epoch快速测试，代码仍然在2个epoch后强制停止
 
 **修复文件**:
-- [tools/train_detr.py](tools/train_detr.py#L308)
+- [tools/train_detr.py](../tools/train_detr.py#L308)
 
 **修复内容**:
 ```python
@@ -186,7 +186,7 @@ if max_iters and max_iters <= 200 and epoch >= 2:
 
 **状态**: ⚠️ 已文档化但未实现
 
-**问题**: 配置文件中定义了数据增强选项（random_flip, color_jitter），但 [dataset/coco_dataset.py](dataset/coco_dataset.py#L115) 只实现了归一化
+**问题**: 配置文件中定义了数据增强选项（random_flip, color_jitter），但 [dataset/coco_dataset.py](../dataset/coco_dataset.py#L115) 只实现了归一化
 
 **当前实现**:
 ```python
@@ -215,7 +215,7 @@ def make_transforms(image_set, config):
 
 ## 验证结果
 
-运行 [tools/verify_fixes.py](tools/verify_fixes.py) 验证所有修复：
+运行 [tools/verify_fixes.py](../tools/verify_fixes.py) 验证所有修复：
 
 ```bash
 python tools/verify_fixes.py
@@ -303,13 +303,13 @@ python tools/eval_detr.py \
 
 | 文件 | 修改内容 |
 |------|----------|
-| [configs/detr_baseline.yaml](configs/detr_baseline.yaml) | 修正模型名为deformable-detr |
-| [configs/detr_smoke.yaml](configs/detr_smoke.yaml) | 修正模型名为deformable-detr |
-| [requirements.txt](requirements.txt) | 添加timm>=0.9.0 |
-| [dataset/coco_dataset.py](dataset/coco_dataset.py) | collate_fn返回列表支持可变尺寸 |
-| [tools/train_detr.py](tools/train_detr.py) | 1) 添加COCO/evaluate导入<br>2) 添加验证循环<br>3) 基于mAP保存最佳模型<br>4) 改进epoch停止逻辑<br>5) 添加torch.stack异常处理 |
-| [tools/eval_detr.py](tools/eval_detr.py) | 1) 添加score_threshold参数（默认0.05）<br>2) 添加torch.stack异常处理 |
-| [tools/verify_fixes.py](tools/verify_fixes.py) | 新增：验证所有修复的脚本 |
+| [configs/detr_baseline.yaml](../configs/detr_baseline.yaml) | 修正模型名为deformable-detr |
+| [configs/detr_smoke.yaml](../configs/detr_smoke.yaml) | 修正模型名为deformable-detr |
+| [requirements.txt](../requirements.txt) | 添加timm>=0.9.0 |
+| [dataset/coco_dataset.py](../dataset/coco_dataset.py) | collate_fn返回列表支持可变尺寸 |
+| [tools/train_detr.py](../tools/train_detr.py) | 1) 添加COCO/evaluate导入<br>2) 添加验证循环<br>3) 基于mAP保存最佳模型<br>4) 改进epoch停止逻辑<br>5) 添加torch.stack异常处理 |
+| [tools/eval_detr.py](../tools/eval_detr.py) | 1) 添加score_threshold参数（默认0.05）<br>2) 添加torch.stack异常处理 |
+| [tools/verify_fixes.py](../tools/verify_fixes.py) | 新增：验证所有修复的脚本 |
 
 ---
 

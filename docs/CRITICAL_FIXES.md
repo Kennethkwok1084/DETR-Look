@@ -11,8 +11,8 @@
 ### 1. 配置键名错误导致启动即报错
 
 **问题描述**:
-- [tools/train_detr.py](tools/train_detr.py#L210) 中读取验证标注使用了错误的键名 `val_ann_file`
-- 配置文件中实际的键名是 `val_ann`（参见 [configs/detr_baseline.yaml](configs/detr_baseline.yaml#L9)）
+- [tools/train_detr.py](../tools/train_detr.py#L210) 中读取验证标注使用了错误的键名 `val_ann_file`
+- 配置文件中实际的键名是 `val_ann`（参见 [configs/detr_baseline.yaml](../configs/detr_baseline.yaml#L9)）
 - 导致训练启动时 KeyError
 
 **修复方案**:
@@ -38,8 +38,8 @@ val_ann_file = root_dir / config['dataset']['val_ann']
 - 当前实现会在 list 分支直接崩溃或产生未定义行为
 
 **错误代码位置**:
-- [tools/train_detr.py](tools/train_detr.py#L78-L89)
-- [tools/eval_detr.py](tools/eval_detr.py#L57-L63)
+- [tools/train_detr.py](../tools/train_detr.py#L78-L89)
+- [tools/eval_detr.py](../tools/eval_detr.py#L57-L63)
 
 **正确修复方案**:
 
@@ -161,10 +161,10 @@ python tools/verify_fixes.py
 
 | 文件 | 修改内容 |
 |------|----------|
-| [tools/train_detr.py](tools/train_detr.py) | 1. 修复配置键名 `val_ann_file` → `val_ann`<br>2. 添加 `DeformableDetrImageProcessor` 导入和初始化<br>3. 使用 ImageProcessor 处理可变尺寸<br>4. 更新 `train_one_epoch` 函数签名 |
-| [tools/eval_detr.py](tools/eval_detr.py) | 1. 添加 `DeformableDetrImageProcessor` 导入<br>2. 使用 ImageProcessor 处理可变尺寸<br>3. 修复 `score_threshold` 参数生效<br>4. 更新 `evaluate` 函数签名 |
-| [tools/verify_variable_size.py](tools/verify_variable_size.py) | 新增：专门验证可变尺寸修复的脚本 |
-| [tools/verify_fixes.py](tools/verify_fixes.py) | 更新：适配新的 DeformableDetrImageProcessor 验证 |
+| [tools/train_detr.py](../tools/train_detr.py) | 1. 修复配置键名 `val_ann_file` → `val_ann`<br>2. 添加 `DeformableDetrImageProcessor` 导入和初始化<br>3. 使用 ImageProcessor 处理可变尺寸<br>4. 更新 `train_one_epoch` 函数签名 |
+| [tools/eval_detr.py](../tools/eval_detr.py) | 1. 添加 `DeformableDetrImageProcessor` 导入<br>2. 使用 ImageProcessor 处理可变尺寸<br>3. 修复 `score_threshold` 参数生效<br>4. 更新 `evaluate` 函数签名 |
+| [tools/verify_variable_size.py](../tools/verify_variable_size.py) | 新增：专门验证可变尺寸修复的脚本 |
+| [tools/verify_fixes.py](../tools/verify_fixes.py) | 更新：适配新的 DeformableDetrImageProcessor 验证 |
 
 ---
 

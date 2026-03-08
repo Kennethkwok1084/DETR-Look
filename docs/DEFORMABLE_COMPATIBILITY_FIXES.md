@@ -13,7 +13,7 @@
 - 原 DeformableDETRModel 仅接受官方风格: `model(samples, targets=None)`
 - 直接运行会 `TypeError: unexpected keyword argument`
 
-**修复**: [`models/deformable_detr_model.py#L212`](models/deformable_detr_model.py#L212)
+**修复**: [`models/deformable_detr_model.py#L212`](../models/deformable_detr_model.py#L212)
 ```python
 def forward(self, pixel_values=None, pixel_mask=None, labels=None, 
             samples=None, targets=None):
@@ -31,9 +31,9 @@ def forward(self, pixel_values=None, pixel_mask=None, labels=None,
 ```
 
 **影响文件**:
-- ✅ [`tools/train_detr.py:86`](tools/train_detr.py#L86) - 训练循环可正常调用
-- ✅ [`tools/train_detr.py:107`](tools/train_detr.py#L107) - 验证集评估可正常调用
-- ✅ [`tools/eval_detr.py:70`](tools/eval_detr.py#L70) - 推理可正常调用
+- ✅ [`tools/train_detr.py:86`](../tools/train_detr.py#L86) - 训练循环可正常调用
+- ✅ [`tools/train_detr.py:107`](../tools/train_detr.py#L107) - 验证集评估可正常调用
+- ✅ [`tools/eval_detr.py:70`](../tools/eval_detr.py#L70) - 推理可正常调用
 
 ---
 
@@ -44,7 +44,7 @@ def forward(self, pixel_values=None, pixel_mask=None, labels=None,
 - 官方 SetCriterion 期望 `labels` 字段
 - 会导致 `KeyError: 'labels'` 或损失计算错误
 
-**修复**: [`models/deformable_detr_model.py#L239`](models/deformable_detr_model.py#L239)
+**修复**: [`models/deformable_detr_model.py#L239`](../models/deformable_detr_model.py#L239)
 ```python
 # 在 forward 方法中自动映射
 targets = []
@@ -63,9 +63,9 @@ for item in labels:
 ```
 
 **影响文件**:
-- ✅ [`tools/train_detr.py:95`](tools/train_detr.py#L95) - 损失计算正确
-- ✅ [`models/deformable_detr_model.py:137`](models/deformable_detr_model.py#L137) - SetCriterion 接收正确字段
-- ✅ [`models/deformable_detr_model.py:198`](models/deformable_detr_model.py#L198) - 返回格式兼容
+- ✅ [`tools/train_detr.py:95`](../tools/train_detr.py#L95) - 损失计算正确
+- ✅ [`models/deformable_detr_model.py:137`](../models/deformable_detr_model.py#L137) - SetCriterion 接收正确字段
+- ✅ [`models/deformable_detr_model.py:198`](../models/deformable_detr_model.py#L198) - 返回格式兼容
 
 ---
 
@@ -77,7 +77,7 @@ for item in labels:
 - 官方 Deformable DETR 输出是 `{'pred_logits': ..., 'pred_boxes': ...}` 字典
 - 直接调用会失败或结果错误
 
-**修复**: [`models/deformable_detr_model.py:307`](models/deformable_detr_model.py#L307)
+**修复**: [`models/deformable_detr_model.py:307`](../models/deformable_detr_model.py#L307)
 ```python
 def post_process_deformable_detr(outputs, target_sizes, threshold=0.7):
     """
@@ -107,7 +107,7 @@ def post_process_deformable_detr(outputs, target_sizes, threshold=0.7):
     return results
 ```
 
-**本地处理器集成**: [`utils/image_processor.py:103`](utils/image_processor.py#L103)
+**本地处理器集成**: [`utils/image_processor.py:103`](../utils/image_processor.py#L103)
 ```python
 class LocalDeformableDetrImageProcessor:
     def post_process_object_detection(self, outputs, threshold=0.5, target_sizes=None):
@@ -127,8 +127,8 @@ class LocalDeformableDetrImageProcessor:
 ```
 
 **影响文件**:
-- ✅ [`tools/eval_detr.py:84`](tools/eval_detr.py#L84) - 后处理正常工作
-- ✅ [`models/deformable_detr_model.py:219`](models/deformable_detr_model.py#L219) - 输出格式正确
+- ✅ [`tools/eval_detr.py:84`](../tools/eval_detr.py#L84) - 后处理正常工作
+- ✅ [`models/deformable_detr_model.py:219`](../models/deformable_detr_model.py#L219) - 输出格式正确
 
 ---
 
@@ -139,7 +139,7 @@ class LocalDeformableDetrImageProcessor:
 - 每次都操作 `sys.path` 和 `sys.modules`
 - 可能导致性能问题和模块污染
 
-**修复**: [`models/deformable_detr_model.py:21`](models/deformable_detr_model.py#L21)
+**修复**: [`models/deformable_detr_model.py:21`](../models/deformable_detr_model.py#L21)
 ```python
 # 模块级缓存
 _DEFORMABLE_MODULES = None
@@ -158,8 +158,8 @@ def _lazy_import_deformable_detr():
 ```
 
 **影响文件**:
-- ✅ [`models/deformable_detr_model.py:31`](models/deformable_detr_model.py#L31) - 仅首次导入时执行
-- ✅ [`models/deformable_detr_model.py:210`](models/deformable_detr_model.py#L210) - forward 调用无开销
+- ✅ [`models/deformable_detr_model.py:31`](../models/deformable_detr_model.py#L31) - 仅首次导入时执行
+- ✅ [`models/deformable_detr_model.py:210`](../models/deformable_detr_model.py#L210) - forward 调用无开销
 
 ---
 
@@ -170,7 +170,7 @@ def _lazy_import_deformable_detr():
 - 会下载 SenseTime 模型（可能几百 MB）
 - 与"本地官方实现"的需求冲突
 
-**修复**: [`models/__init__.py:50`](models/__init__.py#L50)
+**修复**: [`models/__init__.py:50`](../models/__init__.py#L50)
 ```python
 def build_image_processor(config: dict):
     model_type = config['model'].get('type', 'detr').lower()
@@ -186,7 +186,7 @@ def build_image_processor(config: dict):
         return build_local_image_processor(config)
 ```
 
-**本地处理器**: [`utils/image_processor.py`](utils/image_processor.py)
+**本地处理器**: [`utils/image_processor.py`](../utils/image_processor.py)
 ```python
 class LocalDeformableDetrImageProcessor:
     """无需下载的本地处理器"""
@@ -209,8 +209,8 @@ class LocalDeformableDetrImageProcessor:
 ```
 
 **影响文件**:
-- ✅ [`models/__init__.py:47`](models/__init__.py#L47) - 不再下载模型
-- ✅ [`models/__init__.py:63`](models/__init__.py#L63) - 使用本地实现
+- ✅ [`models/__init__.py:47`](../models/__init__.py#L47) - 不再下载模型
+- ✅ [`models/__init__.py:63`](../models/__init__.py#L63) - 使用本地实现
 
 ---
 
@@ -220,7 +220,7 @@ class LocalDeformableDetrImageProcessor:
 - 如果 CUDA 扩展未编译，直接失败
 - CI 环境或新克隆项目会报错
 
-**修复**: [`test_both_models.py:25`](test_both_models.py#L25)
+**修复**: [`test_both_models.py:25`](../test_both_models.py#L25)
 ```python
 try:
     deformable_model = build_model(deformable_config)
@@ -238,7 +238,7 @@ except ImportError as e:
 ```
 
 **影响文件**:
-- ✅ [`test_both_models.py:15`](test_both_models.py#L15) - 友好的错误提示
+- ✅ [`test_both_models.py:15`](../test_both_models.py#L15) - 友好的错误提示
 
 ---
 
@@ -344,14 +344,14 @@ python tools/eval_detr.py \
 ## 修改文件清单
 
 1. **核心修复**:
-   - [`models/deformable_detr_model.py`](models/deformable_detr_model.py) - 接口兼容、标签映射、后处理
-   - [`utils/image_processor.py`](utils/image_processor.py) - 本地图像处理器
-   - [`models/__init__.py`](models/__init__.py) - 处理器路由
+   - [`models/deformable_detr_model.py`](../models/deformable_detr_model.py) - 接口兼容、标签映射、后处理
+   - [`utils/image_processor.py`](../utils/image_processor.py) - 本地图像处理器
+   - [`models/__init__.py`](../models/__init__.py) - 处理器路由
 
 2. **测试脚本**:
-   - [`test_both_models.py`](test_both_models.py) - 错误处理
-   - [`test_interface_fixes.py`](test_interface_fixes.py) - 接口验证
-   - [`test_deformable_compatibility.py`](test_deformable_compatibility.py) - 完整测试（需 CUDA）
+   - [`test_both_models.py`](../test_both_models.py) - 错误处理
+   - [`test_interface_fixes.py`](../test_interface_fixes.py) - 接口验证
+   - [`test_deformable_compatibility.py`](../test_deformable_compatibility.py) - 完整测试（需 CUDA）
 
 3. **不需修改**:
    - ✅ `tools/train_detr.py` - 现有代码兼容

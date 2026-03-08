@@ -167,15 +167,15 @@ def verify_eval_threshold():
     print("6. 验证评估阈值")
     print("="*60)
     
-    eval_file = project_root / 'tools' / 'eval_detr.py'
+    eval_file = project_root / 'tools' / 'eval_unified.py'
     with open(eval_file) as f:
         content = f.read()
     
     # 检查score_threshold参数
     if 'score_threshold=0.05' in content or 'score_threshold' in content:
-        print("✓ eval_detr.py 使用可配置的score_threshold")
+        print("✓ eval_unified.py 使用可配置的 score_threshold")
     else:
-        print("❌ eval_detr.py 缺少score_threshold参数")
+        print("❌ eval_unified.py 缺少 score_threshold 参数")
         return False
     
     # 检查不应该硬编码0.7
@@ -189,23 +189,22 @@ def verify_eval_threshold():
 
 
 def verify_epoch_logic():
-    """验证epoch停止逻辑"""
+    """验证旧入口是否已收敛到统一训练脚本"""
     print("="*60)
-    print("7. 验证Epoch停止逻辑")
+    print("7. 验证训练入口收敛")
     print("="*60)
     
     train_file = project_root / 'tools' / 'train_detr.py'
     with open(train_file) as f:
         content = f.read()
     
-    # 检查改进的停止逻辑
-    if 'max_iters <= 200' in content and 'epoch >= 2' in content:
-        print("✓ 包含改进的epoch停止逻辑（只在max_iters<=200时2epoch停止）")
+    if 'tools.train_unified' in content and '兼容入口' in content:
+        print("✓ train_detr.py 已改为兼容包装，并委托 train_unified.py")
     else:
-        print("❌ 缺少改进的epoch停止逻辑")
+        print("❌ train_detr.py 尚未收敛到统一训练入口")
         return False
     
-    print("\n✅ Epoch逻辑验证通过!\n")
+    print("\n✅ 训练入口收敛验证通过!\n")
     return True
 
 

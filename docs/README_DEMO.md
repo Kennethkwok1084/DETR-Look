@@ -449,7 +449,7 @@ streamlit run app.py --logger.level debug
 
 ### Q4: COCO 数据集路径配置
 
-**A**: 编辑 [tools/app.py](tools/app.py) 的 `DEFAULT_CONFIG` 字典：
+**A**: 编辑 [tools/app.py](../tools/app.py) 的 `DEFAULT_CONFIG` 字典：
 
 ```python
 DEFAULT_CONFIG = {
@@ -467,7 +467,7 @@ DEFAULT_CONFIG = {
 ### Q5: 类别映射不匹配
 
 **A**: 
-- 检查 [configs/classes.yaml](configs/classes.yaml) 配置
+- 检查 [configs/classes.yaml](../configs/classes.yaml) 配置
 - 确保 COCO JSON 中的 `category_id` 与 `classes.yaml` 对应
 - 使用 `--classes_yaml` 参数指定自定义配置
 
@@ -522,9 +522,9 @@ sudo apt-get install fonts-dejavu-core
 
 ## 📚 相关文档
 
-- [develop.md](docs/develop.md) - 完整训练/评测系统开发指南
-- [DETR_TRAINING_GUIDE_CURRENT.md](docs/DETR_TRAINING_GUIDE_CURRENT.md) - DETR 训练详细说明
-- [classes.yaml](configs/classes.yaml) - 类别映射配置
+- [develop.md](develop.md) - 完整训练/评测系统开发指南
+- [DETR_TRAINING_GUIDE_CURRENT.md](DETR_TRAINING_GUIDE_CURRENT.md) - DETR 训练详细说明
+- [classes.yaml](../configs/classes.yaml) - 类别映射配置
 
 ---
 

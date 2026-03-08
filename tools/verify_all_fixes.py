@@ -217,13 +217,15 @@ def check_files():
             "docs/DETR_TRAINING_README.md",
             "docs/FIXES_2026_01_06.md",
         ],
-        "❌ 已标记不可用": [
+        "🗄️ 已归档": [
+            "docs/archive/README_TORCHVISION_SCRIPTS.md",
+            "docs/archive/TORCHVISION_DETR_GUIDE.md.OUTDATED",
+            "docs/archive/TORCHVISION_DETR_SUMMARY.md.OUTDATED",
+            "docs/archive/FIXES_2026_01_06_ROUND3.md.broken",
+        ],
+        "🧹 已删除": [
             "tools/train_detr_torchvision.py.BROKEN",
             "tools/smoke_test_torchvision.py.BROKEN",
-        ],
-        "📄 已过时": [
-            "docs/TORCHVISION_DETR_GUIDE.md.OUTDATED",
-            "docs/TORCHVISION_DETR_SUMMARY.md.OUTDATED",
         ]
     }
     
@@ -232,9 +234,10 @@ def check_files():
         print(f"\n{category}:")
         for path in paths:
             exists = Path(path).exists()
-            status = "✓" if exists else "✗"
+            expect_exists = "已删除" not in category
+            status = "✓" if exists == expect_exists else "✗"
             print(f"  [{status}] {path}")
-            if not exists and "可用" in category:
+            if exists != expect_exists:
                 all_ok = False
     
     return all_ok

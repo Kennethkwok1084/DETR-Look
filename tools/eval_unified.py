@@ -285,15 +285,15 @@ def evaluate(model, dataloader, device, coco_gt, logger, config, score_threshold
         return evaluate_detr(model, dataloader, device, coco_gt, logger, config, score_threshold)
 
 
-def main():
-    parser = argparse.ArgumentParser(description="DETR/Deformable DETR 统一评估脚本")
-    parser.add_argument("--config", type=str, required=True, help="配置文件路径")
-    parser.add_argument("--checkpoint", type=str, required=True, help="checkpoint 路径")
-    parser.add_argument("--eval-set", type=str, default="val", choices=["train", "val"], help="评估集")
-    parser.add_argument("--output", type=str, help="结果输出路径")
-    parser.add_argument("--score-threshold", type=float, default=0.05, help="置信度阈值")
-    
-    args = parser.parse_args()
+def main(args=None):
+    if args is None:
+        parser = argparse.ArgumentParser(description="DETR/Deformable DETR 统一评估脚本")
+        parser.add_argument("--config", type=str, required=True, help="配置文件路径")
+        parser.add_argument("--checkpoint", type=str, required=True, help="checkpoint 路径")
+        parser.add_argument("--eval-set", type=str, default="val", choices=["train", "val"], help="评估集")
+        parser.add_argument("--output", type=str, help="结果输出路径")
+        parser.add_argument("--score-threshold", type=float, default=0.05, help="置信度阈值")
+        args = parser.parse_args()
     
     # 加载配置
     print(f"📖 加载配置: {args.config}")
@@ -320,7 +320,6 @@ def main():
         ann_file = config['dataset']['val_ann']
     
     # 如果是相对路径，拼接 root_dir
-    from pathlib import Path
     ann_file = Path(ann_file)
     if not ann_file.is_absolute():
         root_dir = config['dataset'].get('root_dir', '')
