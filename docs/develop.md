@@ -73,32 +73,39 @@ python tools/smoke_test.py
 
 本段为新增补充说明，原有 DETR 相关内容保持不变。后续迁移将以 Deformable DETR 为核心主线，优先完成模型初始化与权重加载，再完成预处理/后处理一致性对齐，最后补齐 COCO 评估与指标复现。为降低迁移风险，脚本与配置文件命名将继续沿用 `train_detr.py` 与 `configs/detr_*.yaml`，待验证稳定后再统一重命名与清理。
 
-### 0.3 已完成工作概览
+### 0.3 项目当前状态（2026-01-07更新）
 
-#### ✅ 项目架构
-- 目录结构：`tools/`, `configs/`, `data/`, `outputs/`
-- 配置文件：类别映射、训练基础配置
+#### ✅ 已完成
 
-#### ✅ 数据准备工具
-- `tools/convert_to_coco.py`：BDD100K转COCO格式，支持类别映射
-- `tools/validate_coco.py`：COCO数据集完整性验证
-- `tools/smoke_test.py`：快速冒烟测试
+##### 1️⃣ 项目架构与配置
+- ✅ 完整目录结构：`tools/`, `configs/`, `data/`, `outputs/`
+- ✅ 配置管理系统：`configs/classes.yaml`, `configs/detr_baseline.yaml`
 
-#### ✅ 配置系统
-- `configs/classes.yaml`：3类粗粒度映射（vehicle/traffic_sign/traffic_light）
-- `configs/detr_baseline.yaml`：完整训练配置模板
+##### 2️⃣ 数据集工具链
+- ✅ **tools/convert_to_coco.py**：支持 BDD100K, CCTSDB, TT100K 转换
+- ✅ **tools/validate_coco.py**：数据集验证
+- ✅ **tools/smoke_test.py**：冒烟测试
 
-#### ✅ 训练框架
-- `tools/train_detr.py`：训练脚本框架（待完善模型实现）
+##### 3️⃣ 模型与训练
+- ✅ **models/deformable_detr_model.py**：Deformable DETR 模型核心实现
+- ✅ **tools/train_detr.py**：完整训练脚本（支持断点续训、AMP、日志记录）
+- ✅ **tools/eval_detr.py**：检测指标评测
 
-#### 📋 待开发模块
-- 数据加载器（Dataset/DataLoader）
-- Deformable DETR模型实现（backbone/transformer/heads）
-- 训练循环与评估逻辑
-- 跟踪器封装
-- Streamlit前端
-- 完整评测流程
+##### 4️⃣ 可视化与应用
+- ✅ **tools/app.py**：Streamlit 可视化演示系统
+  - 支持图片/数据集推理
+  - GT 可视化
+  - 预测结果对比
+  - 批量导出
 
+##### 5️⃣ 跟踪模块（基础）
+- ✅ **utils/bytetrack_wrapper.py**：ByteTrack 封装（需依赖 yolox）
+
+#### 🚧 进行中 / 待优化
+
+- 🔄 多目标跟踪完整集成测试
+- 🔄 系统性能基准测试 (FPS/Latency)
+- 🔄 论文实验图表自动生成
 ### 0.4 执行节奏与闭环（含冒烟）
 
 节奏原则：单变量、可复现、每步有产出（日志/配置/权重）。
