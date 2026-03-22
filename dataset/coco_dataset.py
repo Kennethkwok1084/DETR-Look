@@ -30,6 +30,8 @@ class CocoDetectionDataset(Dataset):
         ann_file: str,
         transforms: Optional[Any] = None,
         return_masks: bool = False,
+        image_id_offset: int = 0,
+        dataset_name: Optional[str] = None,
     ):
         """
         Args:
@@ -43,6 +45,14 @@ class CocoDetectionDataset(Dataset):
         self.ids = list(sorted(self.coco.imgs.keys()))
         self.transforms = transforms
         self.return_masks = return_masks
+        self.image_id_offset = int(image_id_offset)
+        self.dataset_name = dataset_name or Path(img_folder).name
+        self.max_image_id = max(self.ids) if self.ids else -1
+        categories = sorted(self.coco.dataset.get('categories', []), key=lambda cat: cat.get('id', -1))
+        self.categories_signature = tuple(
+            (cat.get('id'), cat.get('name'))
+            for cat in categories
+        )
         
         # 检查 transforms 兼容性（仅警告一次，避免日志爆炸）
         if self.transforms is not None:
@@ -115,7 +125,7 @@ class CocoDetectionDataset(Dataset):
             })
         
         target = {
-            'image_id': img_id,
+            'image_id': img_id + self.image_id_offset,
             'annotations': annotations,
             'orig_size': orig_size,  # 评估时用于计算 target_sizes
             'size': orig_size,       # 兼容性字段
@@ -238,26 +248,88 @@ def build_dataloader(
     if shuffle is None:
         shuffle = (image_set == 'train')
     
-    # 构建数据集
-    root = Path(config['dataset']['root_dir'])
-    ann_file = root / config['dataset'][f'{image_set}_ann']
-    img_folder = root / 'images' / image_set
-    
-    # 检查是否为过拟合模式（需要在 make_transforms 之前检查）
     overfit_mode = config['training'].get('overfit', False)
+
+    # 构建数据集
+    datasets_list = []
+    image_id_offset = 0
     
-    # 构建 transforms（过拟合模式下强制为 None）
-    if overfit_mode and image_set == 'train':
-        transforms = None
-        print("📌 过拟合模式：禁用数据增强（transforms=None）")
+    # 检查是否配置了多数据集 (datasets列表)
+    if 'datasets' in config['dataset']:
+        category_signature = None
+        for ds_conf in config['dataset']['datasets']:
+            ann_key = f'{image_set}_ann'
+            if ann_key not in ds_conf:
+                if image_set == 'train':
+                    raise KeyError(f"多数据集配置缺少必需字段: {ann_key}")
+                print(f"⚠️  跳过未配置 {ann_key} 的数据集: {ds_conf.get('name', 'unnamed')}")
+                continue
+
+            root = Path(ds_conf['root_dir'])
+            ann_file = Path(ds_conf[ann_key])
+            if not ann_file.is_absolute():
+                ann_file = root / ann_file
+            
+            # 支持每个数据集单独配置 img 目录
+            img_folder = ds_conf.get(f'{image_set}_img')
+            if not img_folder:
+                img_folder = root / 'images' / image_set
+            elif not Path(img_folder).is_absolute():
+                img_folder = root / img_folder
+            
+            # 构建 transforms（过拟合模式下强制为 None）
+            if overfit_mode and image_set == 'train':
+                transforms = None
+            else:
+                transforms = make_transforms(image_set, config)
+            
+            ds = CocoDetectionDataset(
+                img_folder=str(img_folder),
+                ann_file=str(ann_file),
+                transforms=transforms,
+                image_id_offset=image_id_offset,
+                dataset_name=ds_conf.get('name'),
+            )
+            if category_signature is None:
+                category_signature = ds.categories_signature
+            elif ds.categories_signature != category_signature:
+                raise ValueError(
+                    f"数据集类别定义不一致: {ds_conf.get('name', 'unnamed')} 与前序数据集不匹配，"
+                    "请先统一 category_id/name 映射后再混训"
+                )
+            datasets_list.append(ds)
+            print(
+                f"📦 已添加数据集: {ds_conf.get('name', 'unnamed')} "
+                f"({len(ds)} 样本, image_id_offset={image_id_offset})"
+            )
+            image_id_offset += ds.max_image_id + 1
+
+        if not datasets_list:
+            raise ValueError(f"未找到可用于 {image_set} 的数据集配置")
+            
+        from torch.utils.data import ConcatDataset
+        dataset = ConcatDataset(datasets_list)
+        print(f"🔗 已合并 {len(datasets_list)} 个数据集，总样本数: {len(dataset)}")
     else:
-        transforms = make_transforms(image_set, config)
-    
-    dataset = CocoDetectionDataset(
-        img_folder=str(img_folder),
-        ann_file=str(ann_file),
-        transforms=transforms,
-    )
+        # 单一数据集模式 (兼容旧配置)
+        root = Path(config['dataset']['root_dir'])
+        ann_file = root / config['dataset'][f'{image_set}_ann']
+        img_folder = root / 'images' / image_set
+        
+        # 构建 transforms（过拟合模式下强制为 None）
+        if overfit_mode and image_set == 'train':
+            transforms = None
+            print("📌 过拟合模式：禁用数据增强（transforms=None）")
+        else:
+            transforms = make_transforms(image_set, config)
+        
+        dataset = CocoDetectionDataset(
+            img_folder=str(img_folder),
+            ann_file=str(ann_file),
+            transforms=transforms,
+            image_id_offset=0,
+            dataset_name=config['dataset'].get('name'),
+        )
     
     # 子集采样逻辑（用于快速验证或小样本过拟合）
     subset_size = config['training'].get('subset_size')
@@ -275,26 +347,45 @@ def build_dataloader(
             filter_empty = overfit_mode
         
         if filter_empty:
-            # 优先使用 COCO 元数据以避免逐样本加载图像
-            if hasattr(dataset, 'coco') and hasattr(dataset, 'ids'):
-                # 从 COCO 标注中收集所有有标注的 image_id
-                ann_list = dataset.coco.dataset.get('annotations', [])
-                img_ids_with_ann = {ann['image_id'] for ann in ann_list if 'image_id' in ann}
-                # 根据 dataset.ids 中的 image_id 映射回数据集索引
-                valid_indices = [
-                    idx for idx, img_id in enumerate(dataset.ids)
-                    if img_id in img_ids_with_ann
-                ]
-                print(f"🚀 使用 COCO API 快速过滤：{len(dataset)} → {len(valid_indices)} 个有效样本")
-            else:
-                # 回退到逐样本检查逻辑（可能较慢）
-                print("⚠️  未检测到 COCO API，使用逐样本检查（可能较慢）...")
+            # 对于 ConcatDataset，需要遍历底层数据集收集 valid_indices
+            if hasattr(dataset, 'datasets'):
                 valid_indices = []
-                for idx in range(len(dataset)):
-                    _, target = dataset[idx]
-                    if target.get('annotations') and len(target['annotations']) > 0:
-                        valid_indices.append(idx)
-                print(f"🔍 已过滤空标注样本：{len(dataset)} → {len(valid_indices)} 个有效样本")
+                offset = 0
+                for ds in dataset.datasets:
+                    if hasattr(ds, 'coco') and hasattr(ds, 'ids'):
+                        ann_list = ds.coco.dataset.get('annotations', [])
+                        img_ids_with_ann = {ann['image_id'] for ann in ann_list if 'image_id' in ann}
+                        for i, img_id in enumerate(ds.ids):
+                            if img_id in img_ids_with_ann:
+                                valid_indices.append(offset + i)
+                    else:
+                        for i in range(len(ds)):
+                            _, target = ds[i]
+                            if target.get('annotations') and len(target['annotations']) > 0:
+                                valid_indices.append(offset + i)
+                    offset += len(ds)
+                print(f"🚀 跨数据集过滤：{len(dataset)} → {len(valid_indices)} 个有效样本")
+            else:
+                # 优先使用 COCO 元数据以避免逐样本加载图像
+                if hasattr(dataset, 'coco') and hasattr(dataset, 'ids'):
+                    # 从 COCO 标注中收集所有有标注的 image_id
+                    ann_list = dataset.coco.dataset.get('annotations', [])
+                    img_ids_with_ann = {ann['image_id'] for ann in ann_list if 'image_id' in ann}
+                    # 根据 dataset.ids 中的 image_id 映射回数据集索引
+                    valid_indices = [
+                        idx for idx, img_id in enumerate(dataset.ids)
+                        if img_id in img_ids_with_ann
+                    ]
+                    print(f"🚀 使用 COCO API 快速过滤：{len(dataset)} → {len(valid_indices)} 个有效样本")
+                else:
+                    # 回退到逐样本检查逻辑（可能较慢）
+                    print("⚠️  未检测到 COCO API，使用逐样本检查（可能较慢）...")
+                    valid_indices = []
+                    for idx in range(len(dataset)):
+                        _, target = dataset[idx]
+                        if target.get('annotations') and len(target['annotations']) > 0:
+                            valid_indices.append(idx)
+                    print(f"🔍 已过滤空标注样本：{len(dataset)} → {len(valid_indices)} 个有效样本")
             
             if len(valid_indices) == 0:
                 raise ValueError(f"数据集中没有找到有标注的样本，无法进行训练")

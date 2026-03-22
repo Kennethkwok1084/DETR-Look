@@ -6,9 +6,11 @@
 """
 
 import argparse
+import json
 import random
 import sys
 import time
+from copy import deepcopy
 from pathlib import Path
 
 import torch
@@ -206,6 +208,190 @@ def resolve_annotation_path(config, image_set='val') -> Path:
     return ann_file
 
 
+def resolve_dataset_sources(config: dict, image_set: str) -> list[dict]:
+    """解析单/多数据集配置为统一的 split 源列表。"""
+    dataset_config = config['dataset']
+    ann_key = f'{image_set}_ann'
+    img_key = f'{image_set}_img'
+    sources = []
+
+    if dataset_config.get('datasets'):
+        for idx, ds_conf in enumerate(dataset_config['datasets']):
+            if ann_key not in ds_conf:
+                continue
+
+            root_dir = Path(ds_conf['root_dir'])
+            ann_file = Path(ds_conf[ann_key])
+            if not ann_file.is_absolute():
+                ann_file = root_dir / ann_file
+
+            img_folder = ds_conf.get(img_key)
+            if img_folder:
+                img_folder = Path(img_folder)
+                if not img_folder.is_absolute():
+                    img_folder = root_dir / img_folder
+            else:
+                img_folder = root_dir / 'images' / image_set
+
+            sources.append({
+                'name': ds_conf.get('name', f'{image_set}_{idx}'),
+                'ann_file': ann_file,
+                'img_folder': img_folder,
+            })
+        return sources
+
+    if ann_key not in dataset_config:
+        return sources
+
+    ann_file = Path(dataset_config[ann_key])
+    root_dir = Path(dataset_config.get('root_dir', ''))
+    if not ann_file.is_absolute() and str(root_dir):
+        ann_file = root_dir / ann_file
+
+    img_folder = dataset_config.get(img_key)
+    if img_folder:
+        img_folder = Path(img_folder)
+        if not img_folder.is_absolute() and str(root_dir):
+            img_folder = root_dir / img_folder
+    else:
+        img_folder = root_dir / 'images' / image_set if str(root_dir) else Path('images') / image_set
+
+    sources.append({
+        'name': dataset_config.get('name', image_set),
+        'ann_file': ann_file,
+        'img_folder': img_folder,
+    })
+    return sources
+
+
+def _write_json(path: Path, payload: dict):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump(payload, f, indent=2, ensure_ascii=False)
+
+
+def collect_split_summary(sources: list[dict], image_set: str) -> dict:
+    """收集 split 统计，并为多数据集分配唯一 image_id offset。"""
+    summary = {
+        'split': image_set,
+        'num_sources': len(sources),
+        'total_images': 0,
+        'total_annotations': 0,
+        'categories': [],
+        'sources': [],
+    }
+    normalized_categories = None
+    image_id_offset = 0
+
+    for source in sources:
+        with open(source['ann_file'], 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        categories = data.get('categories', [])
+        current_categories = sorted(
+            ((cat.get('id'), cat.get('name')) for cat in categories),
+            key=lambda item: item[0],
+        )
+        if normalized_categories is None:
+            normalized_categories = current_categories
+            summary['categories'] = [
+                {'id': cat_id, 'name': cat_name}
+                for cat_id, cat_name in current_categories
+            ]
+        elif current_categories != normalized_categories:
+            raise ValueError(
+                f"{image_set} split 的类别定义不一致: {source['ann_file']} 与前序数据集不匹配"
+            )
+
+        images = data.get('images', [])
+        annotations = data.get('annotations', [])
+        image_ids = [int(img['id']) for img in images]
+        max_image_id = max(image_ids) if image_ids else -1
+
+        source_summary = {
+            'name': source['name'],
+            'ann_file': str(source['ann_file']),
+            'img_folder': str(source['img_folder']),
+            'num_images': len(images),
+            'num_annotations': len(annotations),
+            'image_id_offset': image_id_offset,
+            'max_source_image_id': max_image_id,
+        }
+        summary['sources'].append(source_summary)
+        summary['total_images'] += len(images)
+        summary['total_annotations'] += len(annotations)
+
+        image_id_offset += max_image_id + 1 if max_image_id >= 0 else 0
+
+    return summary
+
+
+def prepare_coco_ground_truth(output_dir: Path, summary: dict, image_set: str) -> Path | None:
+    """为评估准备 COCO ground truth；多数据集时生成带 offset 的合并标注。"""
+    if not summary.get('sources'):
+        return None
+
+    if len(summary['sources']) == 1:
+        return Path(summary['sources'][0]['ann_file'])
+
+    merged = {
+        'images': [],
+        'annotations': [],
+        'categories': summary.get('categories', []),
+    }
+    next_ann_id = 1
+
+    for source in summary['sources']:
+        with open(source['ann_file'], 'r', encoding='utf-8') as f:
+            data = json.load(f)
+
+        offset = int(source['image_id_offset'])
+        for image in data.get('images', []):
+            new_image = dict(image)
+            new_image['id'] = int(image['id']) + offset
+            merged['images'].append(new_image)
+
+        for ann in data.get('annotations', []):
+            new_ann = dict(ann)
+            new_ann['id'] = next_ann_id
+            next_ann_id += 1
+            new_ann['image_id'] = int(ann['image_id']) + offset
+            merged['annotations'].append(new_ann)
+
+    merged_path = output_dir / f'merged_{image_set}_annotations.json'
+    _write_json(merged_path, merged)
+    return merged_path
+
+
+def write_run_manifest(output_dir: Path, payload: dict):
+    """写出运行清单，供论文与复现实验追踪。"""
+    _write_json(output_dir / 'run_manifest.json', payload)
+
+
+def validate_runtime_config(config: dict, logger):
+    """对当前实际支持的配置能力做显式校验与提示。"""
+    model_type = config.get('model', {}).get('type', 'detr').lower()
+    training_config = config.get('training', {})
+    output_config = config.get('output', {})
+    testing_config = config.get('testing', {})
+    device_config = config.get('device', {})
+
+    if output_config.get('tensorboard') is not None:
+        logger.warning("配置项 output.tensorboard 当前未实现，已忽略")
+
+    if testing_config.get('nms_threshold') is not None:
+        logger.warning("配置项 testing.nms_threshold 当前未生效；DETR/Deformable DETR 评估未使用额外 NMS")
+
+    if device_config.get('gpu_ids') is not None:
+        logger.warning("配置项 device.gpu_ids 当前未生效；统一训练入口仅根据 device.type 选择单设备")
+
+    if training_config.get('resize_schedule') and model_type == 'detr':
+        raise ValueError(
+            "HF DETR 当前不支持真正生效的 progressive resizing；"
+            "请改用 Deformable DETR 主线或移除 training.resize_schedule"
+        )
+
+
 def resolve_device(config: dict) -> torch.device:
     preferred = config.get('device', {}).get('type', 'cuda')
     if preferred == 'cuda' and torch.cuda.is_available():
@@ -246,6 +432,51 @@ def maybe_compile_model(model, config, logger):
         return model
 
 
+def update_dataset_resolution(dataloader, new_size, config, logger):
+    """
+    更新数据集的分辨率以支持渐进式缩放。
+    仅 Deformable DETR 主线支持真正生效的动态更新。
+    """
+    model_type = config.get('model', {}).get('type', 'detr').lower()
+    
+    if model_type in ('deformable_detr', 'deformable-detr'):
+        from dataset.deformable_dataset import make_deformable_transforms
+        
+        # 创建新的临时配置以生成新的 transforms
+        temp_config = deepcopy(config)
+        if 'dataset' not in temp_config:
+            temp_config['dataset'] = {}
+        if 'augmentation' not in temp_config['dataset']:
+            temp_config['dataset']['augmentation'] = {}
+            
+        # 设置新的目标尺寸 (单一边长)
+        temp_config['dataset']['augmentation']['train_max_size'] = new_size
+        temp_config['dataset']['augmentation']['train_scales'] = [new_size]
+        
+        new_transforms = make_deformable_transforms('train', temp_config)
+        
+        # 更新底层数据集的 transforms
+        dataset = dataloader.dataset
+        
+        # 处理 Subset/ConcatDataset 的嵌套
+        def _update_ds_transforms(ds):
+            if hasattr(ds, 'datasets'):
+                for sub_ds in ds.datasets:
+                    _update_ds_transforms(sub_ds)
+            elif hasattr(ds, 'dataset'):
+                _update_ds_transforms(ds.dataset)
+            elif hasattr(ds, '_transforms'):
+                ds._transforms = new_transforms
+                
+        _update_ds_transforms(dataset)
+        logger.info(f"🔄 [渐进式缩放] 已更新数据增强最大分辨率为: {new_size}")
+        
+    else:
+        raise RuntimeError(
+            "HF DETR 不支持运行时动态重建 progressive resizing；"
+            "该分支只保留在配置校验层做 fail-fast，请移除 training.resize_schedule 或切换到 Deformable DETR"
+        )
+
 def main(args):
     """主训练流程"""
     config = load_config(args.config)
@@ -257,9 +488,21 @@ def main(args):
     logger.info(f"配置文件: {args.config}")
     logger.info(f"模型类型: {config.get('model', {}).get('type', 'detr')}")
     logger.info(f"输出目录: {output_dir}")
+    validate_runtime_config(config, logger)
 
     with open(output_dir / 'config.yaml', 'w', encoding='utf-8') as f:
         yaml.dump(config, f, allow_unicode=True, sort_keys=False)
+
+    train_sources = resolve_dataset_sources(config, 'train')
+    if not train_sources:
+        raise ValueError("未找到 train split 配置，请检查 dataset.train_ann 或 dataset.datasets[*].train_ann")
+    train_summary = collect_split_summary(train_sources, 'train')
+    _write_json(output_dir / 'dataset_train_summary.json', train_summary)
+
+    val_sources = resolve_dataset_sources(config, 'val')
+    val_summary = collect_split_summary(val_sources, 'val') if val_sources else None
+    if val_summary:
+        _write_json(output_dir / 'dataset_val_summary.json', val_summary)
 
     setup_seed(config, logger)
 
@@ -279,15 +522,27 @@ def main(args):
 
     val_loader = None
     coco_gt = None
-    if config['dataset'].get('val_ann'):
+    val_ann_path = None
+    if val_summary:
         val_loader, _ = build_dataloader_for_model(config, 'val')
-        val_ann_path = resolve_annotation_path(config, 'val')
-        if val_ann_path.exists():
+        val_ann_path = prepare_coco_ground_truth(output_dir, val_summary, 'val')
+        if val_ann_path is not None and val_ann_path.exists():
             coco_gt = COCO(str(val_ann_path))
             logger.info(f"验证标注: {val_ann_path}")
         else:
             logger.warning(f"未找到验证标注文件: {val_ann_path}，将跳过评估")
             val_loader = None
+
+    write_run_manifest(output_dir, {
+        'config_path': str(Path(args.config).resolve()),
+        'output_dir': str(output_dir.resolve()),
+        'model_type': config.get('model', {}).get('type', 'detr'),
+        'device': str(device),
+        'train_summary_path': str((output_dir / 'dataset_train_summary.json').resolve()),
+        'val_summary_path': str((output_dir / 'dataset_val_summary.json').resolve()) if val_summary else None,
+        'merged_val_ann': str(val_ann_path.resolve()) if val_ann_path is not None and val_ann_path.exists() else None,
+        'resume_checkpoint': args.resume or config['training'].get('resume'),
+    })
 
     optimizer = build_optimizer(model, config, logger)
     scheduler = build_scheduler(optimizer, config)
@@ -327,6 +582,7 @@ def main(args):
     eval_interval = config['training'].get('eval_interval', 1)
     max_iters = config['training'].get('max_iters')
     score_threshold = config.get('testing', {}).get('confidence_threshold', 0.05)
+    save_best_only = bool(config.get('output', {}).get('save_best_only', False))
 
     if start_epoch > num_epochs:
         logger.warning(f"恢复后的起始 epoch={start_epoch} 已超过 max_epochs={num_epochs}，训练结束")
@@ -337,10 +593,29 @@ def main(args):
     logger.info(f"梯度裁剪: {config['training'].get('clip_max_norm', 0.1)}")
 
     last_metrics = {}
+    
+    # 提取 progressive resizing schedule
+    resize_schedule = config['training'].get('resize_schedule', None)
+    
     for epoch in range(start_epoch, num_epochs + 1):
         logger.info(f"\n{'=' * 60}")
         logger.info(f"Epoch {epoch}/{num_epochs}")
         logger.info(f"{'=' * 60}")
+        
+        # 检查是否需要更新分辨率
+        if resize_schedule:
+            # schedule 格式例如: [[1, 640], [20, 800], [40, 960]]
+            # 找到当前 epoch 对应的目标尺寸
+            target_size = None
+            for sched_epoch, size in sorted(resize_schedule, key=lambda x: x[0]):
+                if epoch >= sched_epoch:
+                    target_size = size
+            
+            # 如果这是一个新的分辨率变更点
+            if target_size and any(epoch == sched_epoch for sched_epoch, _ in resize_schedule):
+                logger.info(f"📈 触发 Progressive Resizing, 调整输入尺寸为: {target_size}")
+                update_dataset_resolution(train_loader, target_size, config, logger)
+                
         epoch_start = time.time()
 
         avg_loss = train_one_epoch(
@@ -379,6 +654,11 @@ def main(args):
                 score_threshold=score_threshold,
             )
             logger.info(f"验证结果: {val_metrics}")
+            _write_json(output_dir / 'eval_latest.json', {
+                'epoch': epoch,
+                'score_threshold': score_threshold,
+                'metrics': val_metrics,
+            })
 
         metrics = {
             'loss': avg_loss,
@@ -388,7 +668,7 @@ def main(args):
         metrics_logger.log(metrics, step=epoch, epoch=epoch)
         last_metrics = metrics
 
-        if epoch % save_interval == 0:
+        if (not save_best_only) and epoch % save_interval == 0:
             checkpoint_model = model._orig_mod if hasattr(model, '_orig_mod') else model
             save_checkpoint(
                 model=checkpoint_model,
@@ -445,23 +725,37 @@ def main(args):
 
         logger.info(f"Epoch {epoch} 耗时: {epoch_time:.1f}s")
 
-    checkpoint_model = model._orig_mod if hasattr(model, '_orig_mod') else model
-    save_checkpoint(
-        model=checkpoint_model,
-        optimizer=optimizer,
-        epoch=num_epochs,
-        step=num_epochs * len(train_loader),
-        metrics=last_metrics,
-        output_dir=output_dir,
-        filename='last.pth',
-        scheduler=scheduler,
-        scaler=scaler,
-        best_metric=best_metric,
-        best_loss=best_loss if best_loss < float('inf') else None,
-    )
+    if not save_best_only:
+        checkpoint_model = model._orig_mod if hasattr(model, '_orig_mod') else model
+        save_checkpoint(
+            model=checkpoint_model,
+            optimizer=optimizer,
+            epoch=num_epochs,
+            step=num_epochs * len(train_loader),
+            metrics=last_metrics,
+            output_dir=output_dir,
+            filename='last.pth',
+            scheduler=scheduler,
+            scaler=scaler,
+            best_metric=best_metric,
+            best_loss=best_loss if best_loss < float('inf') else None,
+        )
 
     logger.info("🎉 训练完成")
     logger.info(f"模型保存在: {output_dir}")
+    write_run_manifest(output_dir, {
+        'config_path': str(Path(args.config).resolve()),
+        'output_dir': str(output_dir.resolve()),
+        'model_type': config.get('model', {}).get('type', 'detr'),
+        'device': str(device),
+        'train_summary_path': str((output_dir / 'dataset_train_summary.json').resolve()),
+        'val_summary_path': str((output_dir / 'dataset_val_summary.json').resolve()) if val_summary else None,
+        'merged_val_ann': str(val_ann_path.resolve()) if val_ann_path is not None and val_ann_path.exists() else None,
+        'resume_checkpoint': args.resume or config['training'].get('resume'),
+        'best_metric': best_metric,
+        'best_loss': None if best_loss == float('inf') else best_loss,
+        'last_metrics': last_metrics,
+    })
 
 
 if __name__ == '__main__':

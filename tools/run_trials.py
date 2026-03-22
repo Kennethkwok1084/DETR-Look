@@ -267,7 +267,7 @@ def main():
     parser.add_argument(
         "--base-config",
         type=str,
-        default="configs/detr_baseline.yaml",
+        default="configs/deformable_detr_baseline.yaml",
         help="基础配置文件",
     )
     parser.add_argument(

@@ -58,11 +58,18 @@ class DETRModel(nn.Module):
             )
             self.model = DetrForObjectDetection(detr_config)
             print(f"✅ 模型创建成功：{num_classes} 个类别")
+
+        eos_coef = model_config.get('eos_coef')
+        if eos_coef is None:
+            eos_coef = model_config.get('loss_weights', {}).get('eos_coef')
+        if eos_coef is not None and hasattr(self.model, 'config') and hasattr(self.model.config, 'eos_coefficient'):
+            self.model.config.eos_coefficient = float(eos_coef)
         
         # 设置损失权重
-        self.class_loss_coef = model_config['loss_weights']['class_loss_coef']
-        self.bbox_loss_coef = model_config['loss_weights']['bbox_loss_coef']
-        self.giou_loss_coef = model_config['loss_weights']['giou_loss_coef']
+        loss_weights = model_config.get('loss_weights', {})
+        self.class_loss_coef = float(loss_weights.get('class_loss_coef', 1.0))
+        self.bbox_loss_coef = float(loss_weights.get('bbox_loss_coef', 5.0))
+        self.giou_loss_coef = float(loss_weights.get('giou_loss_coef', 2.0))
         
     def forward(self, pixel_values: torch.Tensor, pixel_mask: torch.Tensor = None, labels: list = None):
         """

@@ -29,6 +29,19 @@ def load_config(config_path: str) -> dict:
         return yaml.safe_load(f)
 
 
+def resolve_eval_output_dir(config: dict, checkpoint_path: str, eval_set: str, override: str | None = None) -> Path:
+    """解析评估输出目录，默认紧邻 checkpoint 保存评估资产。"""
+    if override:
+        override_path = Path(override)
+        if override_path.suffix:
+            return override_path.parent
+        return override_path
+
+    checkpoint_stem = Path(checkpoint_path).stem
+    checkpoint_parent = Path(checkpoint_path).resolve().parent
+    return checkpoint_parent / 'eval' / f'{eval_set}_{checkpoint_stem}'
+
+
 def build_eval_dataloader(config, eval_set='val'):
     """根据模型类型构建评估数据加载器"""
     model_type = config.get('model', {}).get('type', 'detr').lower()
@@ -48,6 +61,156 @@ def build_eval_dataloader(config, eval_set='val'):
         )
         # 返回 (dataloader, dataset) 元组
         return dataloader, dataloader.dataset
+
+
+def _iter_leaf_datasets(dataset):
+    """递归展开 Subset / ConcatDataset，返回最底层数据集。"""
+    from torch.utils.data import ConcatDataset, Subset
+
+    if isinstance(dataset, Subset):
+        yield from _iter_leaf_datasets(dataset.dataset)
+    elif isinstance(dataset, ConcatDataset):
+        for sub_dataset in dataset.datasets:
+            yield from _iter_leaf_datasets(sub_dataset)
+    else:
+        yield dataset
+
+
+def _iter_leaf_samples_at_index(dataset, idx):
+    """按索引递归展开 Subset / ConcatDataset，返回最底层样本位置。"""
+    from torch.utils.data import ConcatDataset, Subset
+
+    if isinstance(dataset, Subset):
+        yield from _iter_leaf_samples_at_index(dataset.dataset, int(dataset.indices[int(idx)]))
+    elif isinstance(dataset, ConcatDataset):
+        running = 0
+        for sub_dataset in dataset.datasets:
+            sub_len = len(sub_dataset)
+            if idx < running + sub_len:
+                yield from _iter_leaf_samples_at_index(sub_dataset, idx - running)
+                return
+            running += sub_len
+        raise IndexError(f"样本索引越界: {idx}")
+    else:
+        yield dataset, int(idx)
+
+
+def _iter_eval_samples(dataset):
+    """按评估顺序遍历所有底层样本。"""
+    from torch.utils.data import ConcatDataset, Subset
+
+    if isinstance(dataset, Subset):
+        for idx in dataset.indices:
+            yield from _iter_leaf_samples_at_index(dataset.dataset, int(idx))
+    elif isinstance(dataset, ConcatDataset):
+        for sub_dataset in dataset.datasets:
+            yield from _iter_eval_samples(sub_dataset)
+    else:
+        for idx in range(len(dataset)):
+            yield dataset, idx
+
+
+def _categories_signature(categories):
+    ordered = sorted(categories, key=lambda cat: int(cat.get('id', -1)))
+    return tuple(
+        (
+            int(cat.get('id', -1)),
+            cat.get('name'),
+            cat.get('supercategory'),
+        )
+        for cat in ordered
+    )
+
+
+def _build_eval_coco_gt(dataset, output_dir: Path, eval_set: str):
+    """
+    从实际评估数据集构建一个顺序重编号后的 COCO GT。
+    这样可以兼容 Subset / ConcatDataset，并避免 image_id 冲突。
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    merged = {
+        'images': [],
+        'annotations': [],
+        'categories': [],
+    }
+    reference_signature = None
+    next_image_id = 0
+    next_ann_id = 0
+
+    for leaf_dataset, local_idx in _iter_eval_samples(dataset):
+        if not hasattr(leaf_dataset, 'coco') or not hasattr(leaf_dataset, 'ids'):
+            raise ValueError("当前评估数据集不支持 COCO GT 构建，请检查数据集封装")
+
+        coco = leaf_dataset.coco
+        img_id = leaf_dataset.ids[int(local_idx)]
+        img_info = dict(coco.loadImgs(img_id)[0])
+        img_info['id'] = next_image_id
+        merged['images'].append(img_info)
+
+        categories = list(coco.dataset.get('categories', []))
+        signature = _categories_signature(categories)
+        if reference_signature is None:
+            reference_signature = signature
+            merged['categories'] = list(sorted(categories, key=lambda cat: int(cat.get('id', -1))))
+            if 'info' in coco.dataset:
+                merged['info'] = coco.dataset['info']
+            if 'licenses' in coco.dataset:
+                merged['licenses'] = coco.dataset['licenses']
+        elif signature != reference_signature:
+            raise ValueError("多数据集评估时检测到不一致的 categories 定义，请先统一类别映射")
+
+        ann_ids = coco.getAnnIds(imgIds=img_id)
+        for ann in coco.loadAnns(ann_ids):
+            new_ann = dict(ann)
+            new_ann['id'] = next_ann_id
+            new_ann['image_id'] = next_image_id
+            merged['annotations'].append(new_ann)
+            next_ann_id += 1
+
+        next_image_id += 1
+
+    merged_path = output_dir / f'{eval_set}_merged_coco.json'
+    with open(merged_path, 'w', encoding='utf-8') as f:
+        json.dump(merged, f, indent=2, ensure_ascii=False)
+
+    return COCO(str(merged_path)), merged_path
+
+
+def build_eval_coco_gt(dataset, output_dir: Path, eval_set: str):
+    """公开评估 GT 构建接口，供训练阶段验证复用。"""
+    return _build_eval_coco_gt(dataset, output_dir, eval_set)
+
+
+def _resolve_continuous_category_map(dataset):
+    """在 Subset / ConcatDataset 中稳健查找连续类别映射。"""
+    mappings = []
+    for leaf_dataset in _iter_leaf_datasets(dataset):
+        mapping = getattr(leaf_dataset, 'continuous_to_cat_id', None)
+        if mapping is not None:
+            mappings.append(mapping)
+
+    if not mappings:
+        return None
+
+    reference = mappings[0]
+    for mapping in mappings[1:]:
+        if mapping != reference:
+            raise ValueError("多数据集评估时检测到不一致的 continuous_to_cat_id 映射")
+    return reference
+
+
+def _resolve_eval_image_id(target, coco_gt, sequential_image_id):
+    """优先使用 target 中的 image_id，若不命中当前 coco_gt，则回退到顺序编号。"""
+    target_image_id = target.get('image_id') if isinstance(target, dict) else None
+    if torch.is_tensor(target_image_id):
+        target_image_id = int(target_image_id.item())
+    elif isinstance(target_image_id, (list, tuple)) and target_image_id:
+        target_image_id = int(target_image_id[0])
+
+    if target_image_id is not None and target_image_id in coco_gt.imgs:
+        return target_image_id
+    return sequential_image_id
 
 
 @torch.no_grad()
@@ -71,6 +234,7 @@ def evaluate_detr(model, dataloader, device, coco_gt, logger, config, score_thre
     
     model.eval()
     results = []
+    sample_index = 0
     
     logger.info("评估 DETR (HF 数据流)...")
     
@@ -108,12 +272,10 @@ def evaluate_detr(model, dataloader, device, coco_gt, logger, config, score_thre
             target_sizes=target_sizes
         )
         
-        # 转换为 COCO 格式（使用原始 targets 确保有 image_id）
+        # 转换为 COCO 格式，使用评估顺序重编号后的 image_id 对齐 merged GT
         for output, target in zip(processed_outputs, original_targets):
-            # 确保 image_id 存在
-            if 'image_id' not in target:
-                raise ValueError(f"Target 缺少 image_id，请检查数据加载器是否保留原始 targets")
-            image_id = target['image_id'].item() if torch.is_tensor(target['image_id']) else target['image_id']
+            image_id = _resolve_eval_image_id(target, coco_gt, sample_index)
+            sample_index += 1
             
             scores = output['scores']
             labels = output['labels']
@@ -159,8 +321,10 @@ def evaluate_deformable(model, dataloader, device, coco_gt, logger, score_thresh
     
     model.eval()
     results = []
+    sample_index = 0
     
     logger.info("评估 Deformable DETR (官方数据流)...")
+    category_id_map = _resolve_continuous_category_map(dataloader.dataset)
     
     for samples, targets in tqdm(dataloader, desc="Evaluating Deformable"):
         # 移到设备
@@ -180,7 +344,8 @@ def evaluate_deformable(model, dataloader, device, coco_gt, logger, score_thresh
         
         # 转换为 COCO 格式
         for output, target in zip(processed_outputs, targets):
-            image_id = target['image_id'].item() if torch.is_tensor(target['image_id']) else target['image_id'][0]
+            image_id = _resolve_eval_image_id(target, coco_gt, sample_index)
+            sample_index += 1
             
             scores = output['scores']
             labels = output['labels']
@@ -196,16 +361,9 @@ def evaluate_deformable(model, dataloader, device, coco_gt, logger, score_thresh
                 x1, y1, x2, y2 = box.tolist()
                 
                 # 关键：将连续索引反映射回原始 COCO category_id
-                # Deformable 数据集将 category_id 映射为 [0, num_classes-1]
-                # 需要反映射回原始 ID 以匹配 COCO 标注
                 continuous_id = label.item()
-                if hasattr(dataloader.dataset, 'dataset'):  # Subset 包装
-                    dataset = dataloader.dataset.dataset
-                else:
-                    dataset = dataloader.dataset
-                
-                if hasattr(dataset, 'continuous_to_cat_id'):
-                    category_id = dataset.continuous_to_cat_id[continuous_id]
+                if category_id_map:
+                    category_id = category_id_map[continuous_id]
                 else:
                     # DETR 或无映射的数据集，直接使用
                     category_id = continuous_id
@@ -291,7 +449,7 @@ def main(args=None):
         parser.add_argument("--config", type=str, required=True, help="配置文件路径")
         parser.add_argument("--checkpoint", type=str, required=True, help="checkpoint 路径")
         parser.add_argument("--eval-set", type=str, default="val", choices=["train", "val"], help="评估集")
-        parser.add_argument("--output", type=str, help="结果输出路径")
+        parser.add_argument("--output", type=str, help="结果输出路径（可选，默认会自动保存到 outputs/ 下）")
         parser.add_argument("--score-threshold", type=float, default=0.05, help="置信度阈值")
         args = parser.parse_args()
     
@@ -302,31 +460,27 @@ def main(args=None):
     model_type = config.get('model', {}).get('type', 'detr')
     print(f"🔧 模型类型: {model_type}")
     
+    output_dir = resolve_eval_output_dir(config, args.checkpoint, args.eval_set, args.output)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # 设备
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    preferred_device = config.get('device', {}).get('type', 'cuda')
+    device = torch.device('cuda' if preferred_device == 'cuda' and torch.cuda.is_available() else 'cpu')
     print(f"🔧 设备: {device}")
     
     # 日志
-    logger = setup_logger('eval')
+    logger = setup_logger(f"eval_{args.eval_set}_{Path(args.checkpoint).stem}", output_dir / 'eval.log')
+    logger.info(f"输出目录: {output_dir}")
+    logger.info(f"checkpoint: {args.checkpoint}")
+    logger.info(f"评估集: {args.eval_set}")
     
     # 构建数据加载器
     print("\n📦 构建数据加载器...")
     dataloader, dataset = build_eval_dataloader(config, args.eval_set)
-    
-    # 加载 COCO ground truth
-    if args.eval_set == 'train':
-        ann_file = config['dataset']['train_ann']
-    else:
-        ann_file = config['dataset']['val_ann']
-    
-    # 如果是相对路径，拼接 root_dir
-    ann_file = Path(ann_file)
-    if not ann_file.is_absolute():
-        root_dir = config['dataset'].get('root_dir', '')
-        if root_dir:
-            ann_file = Path(root_dir) / ann_file
-    
-    coco_gt = COCO(str(ann_file))
+
+    # 基于实际评估数据集构建 COCO GT，避免多数据集 / Subset / ConcatDataset 的 image_id 冲突
+    coco_gt, merged_gt_path = _build_eval_coco_gt(dataset, output_dir, args.eval_set)
+    logger.info(f"COCO GT: {merged_gt_path}")
     
     # 构建模型
     print("\n🏗️  构建模型...")
@@ -352,13 +506,18 @@ def main(args=None):
         print(f"  {k}: {v:.4f}")
     print("=" * 60)
     
-    # 保存结果
+    # 保存结果：默认落盘，用户不需要额外参数
     if args.output:
         output_path = Path(args.output)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, 'w', encoding='utf-8') as f:
-            json.dump(metrics, f, indent=2)
-        print(f"\n💾 结果已保存: {output_path}")
+        if not output_path.suffix:
+            output_path = output_path / 'metrics.json'
+    else:
+        output_path = output_dir / 'metrics.json'
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(output_path, 'w', encoding='utf-8') as f:
+        json.dump(metrics, f, indent=2, ensure_ascii=False)
+    print(f"\n💾 结果已保存: {output_path}")
 
 
 if __name__ == '__main__':

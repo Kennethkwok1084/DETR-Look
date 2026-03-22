@@ -2,7 +2,7 @@
 """
 DETR 交通场景检测演示 Web UI
 提供三个主要功能模块：
-1. 预训练模型推理
+1. 本地 checkpoint / HF 演示模型推理
 2. COCO GT 可视化
 3. 预测与 GT 对比展示
 """
@@ -10,16 +10,16 @@ DETR 交通场景检测演示 Web UI
 import sys
 from pathlib import Path
 import json
-from typing import Optional, Tuple, List
+from typing import Optional, List, Dict
 import io
 
 import streamlit as st
 from PIL import Image
-import yaml
 
 # 添加项目根目录到路径
-ROOT_DIR = Path(__file__).parent
-sys.path.insert(0, str(ROOT_DIR))
+APP_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = APP_DIR.parent
+sys.path.insert(0, str(APP_DIR))
 
 # 导入自定义模块
 try:
@@ -32,23 +32,57 @@ except ImportError as e:
 
 # ==================== 配置与常量 ====================
 
+def repo_path(relative_path: str) -> str:
+    """将仓库内相对路径转换为绝对路径字符串。"""
+    return str((PROJECT_ROOT / relative_path).resolve())
+
+
+def discover_latest_local_run() -> Dict[str, str]:
+    """尽量发现最近一次训练产出的本地配置和 checkpoint。"""
+    outputs_dir = PROJECT_ROOT / "outputs"
+    if not outputs_dir.exists():
+        return {"config_path": repo_path("configs/deformable_detr_baseline.yaml"), "checkpoint_path": ""}
+
+    candidates = []
+    for pattern in ("best.pth", "last.pth"):
+        candidates.extend(outputs_dir.rglob(pattern))
+
+    if not candidates:
+        return {"config_path": repo_path("configs/deformable_detr_baseline.yaml"), "checkpoint_path": ""}
+
+    latest_ckpt = max(candidates, key=lambda p: p.stat().st_mtime)
+    config_path = latest_ckpt.parent / "config.yaml"
+    if not config_path.exists():
+        config_path = PROJECT_ROOT / "configs" / "deformable_detr_baseline.yaml"
+
+    return {
+        "config_path": str(config_path.resolve()),
+        "checkpoint_path": str(latest_ckpt.resolve()),
+    }
+
+
+LATEST_LOCAL_RUN = discover_latest_local_run()
+
+
 DEFAULT_CONFIG = {
-    "model_name": "facebook/detr-resnet-50",
+    "hf_model_name": "facebook/detr-resnet-50",
+    "local_config_path": LATEST_LOCAL_RUN["config_path"],
+    "local_checkpoint_path": LATEST_LOCAL_RUN["checkpoint_path"],
     "confidence_threshold": 0.8,
-    "classes_yaml": "../configs/classes.yaml",
+    "classes_yaml": repo_path("configs/classes.yaml"),
     "coco_datasets": {
-        "BDD100K (train)": "../data/traffic_coco/bdd100k_det/annotations/instances_train.json",
-        "BDD100K (val)": "../data/traffic_coco/bdd100k_det/annotations/instances_val.json",
-        "CCTSDB (train)": "../data/traffic_coco/cctsdb_det/annotations/instances_train.json",
-        "CCTSDB (test)": "../data/traffic_coco/cctsdb_det/annotations/instances_test.json",
-        "TT100K (train)": "../data/traffic_coco/tt100k_det/annotations/instances_train.json"
+        "BDD100K (train)": repo_path("data/traffic_coco/bdd100k_det/annotations/instances_train.json"),
+        "BDD100K (val)": repo_path("data/traffic_coco/bdd100k_det/annotations/instances_val.json"),
+        "CCTSDB (train)": repo_path("data/traffic_coco/cctsdb_det/annotations/instances_train.json"),
+        "CCTSDB (test)": repo_path("data/traffic_coco/cctsdb_det/annotations/instances_test.json"),
+        "TT100K (train)": repo_path("data/traffic_coco/tt100k_det/annotations/instances_train.json")
     },
     "image_roots": {
-        "BDD100K (train)": "../data/traffic_coco/bdd100k_det/images/train",
-        "BDD100K (val)": "../data/traffic_coco/bdd100k_det/images/val",
-        "CCTSDB (train)": "../data/traffic_coco/cctsdb_det/images/train",
-        "CCTSDB (test)": "../data/traffic_coco/cctsdb_det/images/test",
-        "TT100K (train)": "../data/traffic_coco/tt100k_det/images/train"
+        "BDD100K (train)": repo_path("data/traffic_coco/bdd100k_det/images/train"),
+        "BDD100K (val)": repo_path("data/traffic_coco/bdd100k_det/images/val"),
+        "CCTSDB (train)": repo_path("data/traffic_coco/cctsdb_det/images/train"),
+        "CCTSDB (test)": repo_path("data/traffic_coco/cctsdb_det/images/test"),
+        "TT100K (train)": repo_path("data/traffic_coco/tt100k_det/images/train")
     }
 }
 
@@ -56,14 +90,25 @@ DEFAULT_CONFIG = {
 # ==================== 辅助函数 ====================
 
 @st.cache_resource
-def load_inferencer(model_name: str, threshold: float, keep_labels: Optional[List[str]] = None, device: int = -1):
+def load_inferencer(
+    source_mode: str,
+    model_name: str,
+    config_path: Optional[str],
+    checkpoint_path: Optional[str],
+    threshold: float,
+    keep_labels: Optional[tuple] = None,
+    device: int = -1,
+):
     """加载推理模型（带缓存）"""
     try:
+        keep_labels_list = list(keep_labels) if keep_labels else None
         inferencer = PretrainedDETRInference(
             model_name=model_name,
+            config_path=config_path if source_mode == "local" else None,
+            checkpoint_path=checkpoint_path if source_mode == "local" else None,
             device=device,
             confidence_threshold=threshold,
-            keep_labels=keep_labels,
+            keep_labels=keep_labels_list,
             classes_yaml=DEFAULT_CONFIG["classes_yaml"]
         )
         return inferencer
@@ -106,44 +151,116 @@ def pil_to_bytes(image: Image.Image, format: str = "PNG") -> bytes:
     return buf.getvalue()
 
 
+def render_inference_controls(prefix: str, include_keep_labels: bool = True) -> Dict[str, object]:
+    """渲染统一的推理参数控件。"""
+    source_label = st.radio(
+        "模型来源",
+        ["本地 checkpoint（推荐）", "HF 演示模型"],
+        index=0,
+        key=f"{prefix}_source",
+        help="主线默认使用本地训练得到的 Deformable DETR checkpoint"
+    )
+    source_mode = "local" if source_label.startswith("本地") else "hf"
+
+    threshold = st.slider(
+        "置信度阈值",
+        0.1,
+        0.9,
+        DEFAULT_CONFIG["confidence_threshold"],
+        0.05,
+        key=f"{prefix}_threshold",
+    )
+
+    keep_labels = None
+    if include_keep_labels:
+        keep_labels_input = st.text_input(
+            "类别过滤 (可选)",
+            placeholder="如: vehicle, traffic_sign",
+            help="逗号分隔，留空表示不过滤",
+            key=f"{prefix}_keep_labels",
+        )
+        if keep_labels_input.strip():
+            keep_labels = [label.strip() for label in keep_labels_input.split(",") if label.strip()]
+
+    device = st.radio("设备", ["CPU", "GPU"], index=0, key=f"{prefix}_device")
+    device_id = -1 if device == "CPU" else 0
+
+    model_name = DEFAULT_CONFIG["hf_model_name"]
+    config_path = DEFAULT_CONFIG["local_config_path"]
+    checkpoint_path = DEFAULT_CONFIG["local_checkpoint_path"]
+
+    if source_mode == "local":
+        config_path = st.text_input(
+            "配置文件路径",
+            value=config_path,
+            key=f"{prefix}_config_path",
+            help="通常使用训练输出目录中的 config.yaml",
+        )
+        checkpoint_path = st.text_input(
+            "Checkpoint 路径",
+            value=checkpoint_path,
+            key=f"{prefix}_checkpoint_path",
+            help="通常使用训练输出目录中的 best.pth 或 last.pth",
+        )
+        if checkpoint_path:
+            st.caption(f"当前本地 checkpoint: `{checkpoint_path}`")
+        else:
+            st.info("未发现默认 checkpoint，请填写本地训练产出的 best.pth 或 last.pth 路径")
+    else:
+        model_name = st.selectbox(
+            "HF 模型",
+            ["facebook/detr-resnet-50", "facebook/detr-resnet-101"],
+            index=0,
+            key=f"{prefix}_model_name",
+        )
+
+    return {
+        "source_mode": source_mode,
+        "model_name": model_name,
+        "config_path": config_path,
+        "checkpoint_path": checkpoint_path,
+        "threshold": threshold,
+        "keep_labels": keep_labels,
+        "device_id": device_id,
+    }
+
+
+def get_inferencer(settings: Dict[str, object]):
+    """根据当前页面设置加载推理器。"""
+    if settings["source_mode"] == "local":
+        if not settings["config_path"]:
+            st.warning("请填写本地模型配置文件路径")
+            return None
+        if not settings["checkpoint_path"]:
+            st.warning("请填写本地 checkpoint 路径")
+            return None
+
+    keep_labels = tuple(settings["keep_labels"]) if settings["keep_labels"] else None
+    return load_inferencer(
+        source_mode=settings["source_mode"],
+        model_name=settings["model_name"],
+        config_path=settings["config_path"],
+        checkpoint_path=settings["checkpoint_path"],
+        threshold=settings["threshold"],
+        keep_labels=keep_labels,
+        device=settings["device_id"],
+    )
+
+
 # ==================== 页面：预训练模型推理 ====================
 
 def page_inference():
     """Tab 1: 预训练模型推理（支持上传和目录选图）"""
-    st.header("🚗 预训练 DETR 模型推理")
-    st.markdown("上传图片或从数据集中选择图片进行目标检测")
+    st.header("🚗 模型推理")
+    st.markdown("默认使用本地训练得到的 Deformable DETR checkpoint，也保留 HF 演示模型作为兼容路径")
     
     # 侧边栏：模型配置
     with st.sidebar:
         st.subheader("模型配置")
-        model_name = st.selectbox(
-            "选择模型",
-            ["facebook/detr-resnet-50", "facebook/detr-resnet-101"],
-            index=0
-        )
-        threshold = st.slider("置信度阈值", 0.1, 0.9, 0.8, 0.05)
-        
-        # keep_labels 过滤
-        keep_labels_input = st.text_input(
-            "类别过滤 (可选)",
-            placeholder="如: car, truck, bus",
-            help="逗号分隔，留空表示不过滤"
-        )
-        keep_labels = None
-        if keep_labels_input.strip():
-            keep_labels = [label.strip() for label in keep_labels_input.split(",")]
-        
-        device = st.radio("设备", ["CPU", "GPU"], index=0)
-        device_id = -1 if device == "CPU" else 0
+        inference_settings = render_inference_controls("inference", include_keep_labels=True)
     
     # 选择输入方式
     input_mode = st.radio("输入方式", ["上传图片", "从数据集选择"], horizontal=True)
-    
-    # 加载推理器（注意缓存键包含keep_labels）
-    cache_key = f"{model_name}_{threshold}_{str(keep_labels)}_{device_id}"
-    inferencer = load_inferencer(model_name, threshold, keep_labels, device_id)
-    if inferencer is None:
-        st.stop()
     
     if input_mode == "上传图片":
         # 文件上传模式
@@ -166,6 +283,9 @@ def page_inference():
             if st.button("🔍 开始检测", type="primary"):
                 with st.spinner("正在推理..."):
                     try:
+                        inferencer = get_inferencer(inference_settings)
+                        if inferencer is None:
+                            st.stop()
                         # 保存临时文件
                         temp_path = "/tmp/uploaded_image.jpg"
                         image.save(temp_path)
@@ -251,6 +371,9 @@ def page_inference():
             if st.button("🔍 开始检测", type="primary", key="dataset_infer"):
                 with st.spinner("正在推理..."):
                     try:
+                        inferencer = get_inferencer(inference_settings)
+                        if inferencer is None:
+                            st.stop()
                         # 执行推理
                         detections, _ = inferencer.infer_single(str(img_path))
                         
@@ -409,20 +532,12 @@ def page_gt_visualization():
 def page_comparison():
     """Tab 3: 预测与 GT 对比"""
     st.header("🔬 预测结果与 GT 对比")
-    st.markdown("将预训练模型的预测结果与数据集 Ground Truth 进行并排对比")
+    st.markdown("默认对比本地训练得到的 Deformable DETR 结果与数据集 Ground Truth")
     
     # 侧边栏配置
     with st.sidebar:
         st.subheader("模型配置")
-        model_name = st.selectbox(
-            "模型",
-            ["facebook/detr-resnet-50", "facebook/detr-resnet-101"],
-            index=0,
-            key="comp_model"
-        )
-        threshold = st.slider("置信度阈值", 0.1, 0.9, 0.8, 0.05, key="comp_threshold")
-        device = st.radio("设备", ["CPU", "GPU"], index=0, key="comp_device")
-        device_id = -1 if device == "CPU" else 0
+        inference_settings = render_inference_controls("comparison", include_keep_labels=False)
         
         st.divider()
         
@@ -434,12 +549,10 @@ def page_comparison():
             key="comp_dataset"
         )
     
-    # 加载模型和数据
-    inferencer = load_inferencer(model_name, threshold, None, device_id)
     visualizer = load_gt_visualizer(dataset_name)
     
-    if inferencer is None or visualizer is None:
-        st.warning("模型或数据集加载失败")
+    if visualizer is None:
+        st.warning("数据集加载失败")
         st.stop()
     
     # 图片选择
@@ -462,6 +575,9 @@ def page_comparison():
     if st.button("🔄 生成对比", type="primary"):
         with st.spinner("正在生成对比结果..."):
             try:
+                inferencer = get_inferencer(inference_settings)
+                if inferencer is None:
+                    st.stop()
                 # 加载原图
                 original_image = Image.open(img_path).convert("RGB")
                 
@@ -530,30 +646,12 @@ def page_comparison():
 def page_batch_export():
     """Tab 4: 批量推理与导出"""
     st.header("📦 批量推理与导出")
-    st.markdown("批量处理数据集图片，导出推理结果和日志文件")
+    st.markdown("批量处理数据集图片，默认使用本地训练得到的 Deformable DETR checkpoint")
     
     # 侧边栏配置
     with st.sidebar:
         st.subheader("模型配置")
-        model_name = st.selectbox(
-            "模型",
-            ["facebook/detr-resnet-50", "facebook/detr-resnet-101"],
-            index=0,
-            key="batch_model"
-        )
-        threshold = st.slider("置信度阈值", 0.1, 0.9, 0.8, 0.05, key="batch_threshold")
-        
-        keep_labels_input = st.text_input(
-            "类别过滤 (可选)",
-            placeholder="如: car, truck, bus",
-            key="batch_keep_labels"
-        )
-        keep_labels = None
-        if keep_labels_input.strip():
-            keep_labels = [label.strip() for label in keep_labels_input.split(",")]
-        
-        device = st.radio("设备", ["CPU", "GPU"], index=0, key="batch_device")
-        device_id = -1 if device == "CPU" else 0
+        inference_settings = render_inference_controls("batch", include_keep_labels=True)
     
     # 数据集选择
     dataset_name = st.selectbox(
@@ -594,13 +692,13 @@ def page_batch_export():
             st.stop()
         
         # 加载推理器
-        inferencer = load_inferencer(model_name, threshold, keep_labels, device_id)
+        inferencer = get_inferencer(inference_settings)
         if inferencer is None:
             st.error("模型加载失败")
             st.stop()
         
         # 准备输出目录
-        output_dir = Path(f"../outputs/demo_pred/{output_name}")
+        output_dir = PROJECT_ROOT / "outputs" / "demo_pred" / output_name
         output_dir.mkdir(parents=True, exist_ok=True)
         
         # 获取图片列表
@@ -659,7 +757,7 @@ def page_batch_export():
         
         # 保存日志
         if save_log:
-            log_dir = Path("../outputs/logs")
+            log_dir = PROJECT_ROOT / "outputs" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             log_file = log_dir / f"batch_{output_name}.log"
             with open(log_file, 'w', encoding='utf-8') as f:
@@ -702,7 +800,7 @@ def main():
     
     # Tab 导航
     tab1, tab2, tab3, tab4 = st.tabs([
-        "🔍 预训练模型推理",
+        "🔍 模型推理",
         "📊 Ground Truth 可视化",
         "🔬 预测与 GT 对比",
         "📦 批量导出与日志"
@@ -725,7 +823,7 @@ def main():
     st.markdown(
         """
         <div style='text-align: center; color: gray;'>
-        DETR Traffic Analysis Demo | Powered by Hugging Face Transformers & Streamlit
+        DETR Traffic Analysis Demo | Deformable DETR Mainline | Streamlit Frontend
         </div>
         """,
         unsafe_allow_html=True

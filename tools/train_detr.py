@@ -32,8 +32,8 @@ def dump_temp_config(config: dict) -> Path:
 
 def build_parser() -> argparse.ArgumentParser:
     """保留旧命令行参数，内部委托给统一训练入口。"""
-    parser = argparse.ArgumentParser(description="训练 DETR 模型用于交通场景目标检测")
-    parser.add_argument("--config", type=str, default="configs/detr_baseline.yaml", help="配置文件路径")
+    parser = argparse.ArgumentParser(description="训练 Deformable DETR 主线模型用于交通场景目标检测")
+    parser.add_argument("--config", type=str, default="configs/deformable_detr_baseline.yaml", help="配置文件路径")
     parser.add_argument("--output-dir", type=str, default=None, help="输出目录（覆盖配置文件中的设置）")
     parser.add_argument("--max-iter", type=int, default=None, help="最大迭代次数（用于冒烟测试）")
     parser.add_argument("--eval-interval", type=int, default=None, help="评估间隔")

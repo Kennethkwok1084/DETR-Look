@@ -21,6 +21,7 @@ dataset:
 
 # 模型配置
 model:
+  type: "detr"  # 兼容分支，主线训练请优先使用 deformable_detr_baseline
   name: "detr-resnet-50"  # Hugging Face模型ID
   backbone: "resnet50"
   pretrained: true
@@ -44,7 +45,7 @@ training:
   batch_size: 4
   num_workers: 4
   max_epochs: 50
-  max_iters: null  # 如果设置则优先使用iter
+  max_iters: null  # 每个epoch最多迭代数（用于快速验证/冒烟）
   
   # 优化器
   optimizer:
@@ -85,8 +86,7 @@ training:
   overfit: false  # 开启时：使用前N个样本，关闭shuffle和数据增强
   
   # Progressive Resizing（渐进式分辨率）
-  resize_schedule: null  # 格式: [[epoch1, size1], [epoch2, size2], ...]
-  # 示例: [[1, 640], [20, 800], [40, 960]]
+  resize_schedule: null  # HF DETR 当前不支持运行时动态 progressive resizing，请保持 null
   
 # 验证配置
 validation:
@@ -97,14 +97,12 @@ validation:
 testing:
   batch_size: 1
   confidence_threshold: 0.7
-  nms_threshold: 0.5
 
 # 输出配置
 output:
   base_dir: "outputs"
   experiment_name: "detr_baseline"
   save_best_only: false
-  tensorboard: true
   
 # 冒烟测试配置（快速验证训练流程）
 smoke_test:
@@ -117,7 +115,6 @@ smoke_test:
 # 设备配置
 device:
   type: "cuda"  # cuda or cpu
-  gpu_ids: [0]
-  
+
 # 随机种子
 seed: 42

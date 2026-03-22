@@ -133,12 +133,11 @@ validation:
 testing:
   batch_size: 1
   confidence_threshold: 0.7
-  nms_threshold: 0.5
 
 # 设备配置
 device:
   type: "cuda"  # cuda 或 cpu
-  
+
 # 输出配置
 output:
   base_dir: "outputs"

@@ -114,7 +114,7 @@ class DeformableCOCODataset(torch.utils.data.Dataset):
     生成 NestedTensor 和 targets，与官方 Deformable DETR 兼容
     """
     
-    def __init__(self, img_folder, ann_file, transforms=None, return_masks=False):
+    def __init__(self, img_folder, ann_file, transforms=None, return_masks=False, image_id_offset=0, dataset_name=None):
         """
         Args:
             img_folder: 图像文件夹路径
@@ -129,11 +129,19 @@ class DeformableCOCODataset(torch.utils.data.Dataset):
         self.ids = list(sorted(self.coco.imgs.keys()))
         self._transforms = transforms
         self.return_masks = return_masks
+        self.image_id_offset = int(image_id_offset)
+        self.dataset_name = dataset_name or Path(img_folder).name
+        self.max_image_id = max(self.ids) if self.ids else -1
         
         # 获取类别映射
         self.cat_ids = sorted(self.coco.getCatIds())
         self.cat_id_to_continuous = {cat_id: idx for idx, cat_id in enumerate(self.cat_ids)}
         self.continuous_to_cat_id = {idx: cat_id for cat_id, idx in self.cat_id_to_continuous.items()}
+        categories = sorted(self.coco.dataset.get('categories', []), key=lambda cat: cat.get('id', -1))
+        self.categories_signature = tuple(
+            (cat.get('id'), cat.get('name'))
+            for cat in categories
+        )
         
         print(f"✅ 加载 Deformable COCO 数据集:")
         print(f"   - 图像数量: {len(self.ids)}")
@@ -213,7 +221,7 @@ class DeformableCOCODataset(torch.utils.data.Dataset):
         target = {}
         target["boxes"] = boxes
         target["labels"] = labels
-        target["image_id"] = torch.tensor([img_id])
+        target["image_id"] = torch.tensor([img_id + self.image_id_offset])
         target["area"] = areas
         target["iscrowd"] = iscrowds
         target["orig_size"] = torch.as_tensor([int(h), int(w)])
@@ -241,45 +249,102 @@ def build_deformable_dataloader(config, image_set='train'):
     train_config = config['training']
     val_config = config.get('validation', {})
     
-    if image_set == 'train':
-        # 支持两种配置方式：train_img 或 root_dir + images/train
-        img_folder = dataset_config.get('train_img')
-        if not img_folder:
-            root_dir = dataset_config.get('root_dir', 'data')
-            img_folder = str(Path(root_dir) / 'images' / 'train')
-        elif not Path(img_folder).is_absolute() and dataset_config.get('root_dir'):
-            img_folder = str(Path(dataset_config['root_dir']) / img_folder)
-        
-        ann_file = dataset_config['train_ann']
-        # 如果 ann_file 是相对路径，拼接 root_dir
-        ann_file = Path(ann_file)
-        if not ann_file.is_absolute() and 'root_dir' in dataset_config:
-            ann_file = Path(dataset_config['root_dir']) / ann_file
-        ann_file = str(ann_file)
-    else:
-        img_folder = dataset_config.get('val_img')
-        if not img_folder:
-            root_dir = dataset_config.get('root_dir', 'data')
-            img_folder = str(Path(root_dir) / 'images' / 'val')
-        elif not Path(img_folder).is_absolute() and dataset_config.get('root_dir'):
-            img_folder = str(Path(dataset_config['root_dir']) / img_folder)
-        
-        ann_file = dataset_config['val_ann']
-        ann_file = Path(ann_file)
-        if not ann_file.is_absolute() and 'root_dir' in dataset_config:
-            ann_file = Path(dataset_config['root_dir']) / ann_file
-        ann_file = str(ann_file)
-    
     # 创建 transforms
     transforms = make_deformable_transforms(image_set, config)
     
     # 创建数据集
-    dataset = DeformableCOCODataset(
-        img_folder=img_folder,
-        ann_file=ann_file,
-        transforms=transforms,
-        return_masks=False
-    )
+    datasets_list = []
+    
+    if 'datasets' in dataset_config:
+        category_signature = None
+        image_id_offset = 0
+        for ds_conf in dataset_config['datasets']:
+            ann_key = f'{image_set}_ann'
+            if ann_key not in ds_conf:
+                if image_set == 'train':
+                    raise KeyError(f"多数据集配置缺少必需字段: {ann_key}")
+                print(f"⚠️  跳过未配置 {ann_key} 的数据集: {ds_conf.get('name', 'unnamed')}")
+                continue
+
+            root = Path(ds_conf['root_dir'])
+            ann_file = Path(ds_conf[ann_key])
+            if not ann_file.is_absolute():
+                ann_file = root / ann_file
+            
+            img_folder = ds_conf.get(f'{image_set}_img')
+            if not img_folder:
+                img_folder = str(root / 'images' / image_set)
+            elif not Path(img_folder).is_absolute():
+                img_folder = str(root / img_folder)
+            
+            ds = DeformableCOCODataset(
+                img_folder=img_folder,
+                ann_file=str(ann_file),
+                transforms=transforms,
+                return_masks=False,
+                image_id_offset=image_id_offset,
+                dataset_name=ds_conf.get('name'),
+            )
+            if category_signature is None:
+                category_signature = ds.categories_signature
+                merged_mapping = dict(ds.continuous_to_cat_id)
+            elif ds.categories_signature != category_signature:
+                raise ValueError(
+                    f"数据集类别定义不一致: {ds_conf.get('name', 'unnamed')} 与前序数据集不匹配，"
+                    "请先统一 category_id/name 映射后再混训"
+                )
+            datasets_list.append(ds)
+            print(
+                f"📦 已添加数据集: {ds_conf.get('name', 'unnamed')} "
+                f"({len(ds)} 样本, image_id_offset={image_id_offset})"
+            )
+            image_id_offset += ds.max_image_id + 1
+
+        if not datasets_list:
+            raise ValueError(f"未找到可用于 {image_set} 的数据集配置")
+            
+        from torch.utils.data import ConcatDataset
+        dataset = ConcatDataset(datasets_list)
+        dataset.continuous_to_cat_id = merged_mapping
+        print(f"🔗 已合并 {len(datasets_list)} 个数据集，总样本数: {len(dataset)}")
+    else:
+        # 单一数据集模式
+        if image_set == 'train':
+            # 支持两种配置方式：train_img 或 root_dir + images/train
+            img_folder = dataset_config.get('train_img')
+            if not img_folder:
+                root_dir = dataset_config.get('root_dir', 'data')
+                img_folder = str(Path(root_dir) / 'images' / 'train')
+            elif not Path(img_folder).is_absolute() and dataset_config.get('root_dir'):
+                img_folder = str(Path(dataset_config['root_dir']) / img_folder)
+
+            ann_file = dataset_config['train_ann']
+            ann_file = Path(ann_file)
+            if not ann_file.is_absolute() and 'root_dir' in dataset_config:
+                ann_file = Path(dataset_config['root_dir']) / ann_file
+            ann_file = str(ann_file)
+        else:
+            img_folder = dataset_config.get('val_img')
+            if not img_folder:
+                root_dir = dataset_config.get('root_dir', 'data')
+                img_folder = str(Path(root_dir) / 'images' / 'val')
+            elif not Path(img_folder).is_absolute() and dataset_config.get('root_dir'):
+                img_folder = str(Path(dataset_config['root_dir']) / img_folder)
+
+            ann_file = dataset_config['val_ann']
+            ann_file = Path(ann_file)
+            if not ann_file.is_absolute() and 'root_dir' in dataset_config:
+                ann_file = Path(dataset_config['root_dir']) / ann_file
+            ann_file = str(ann_file)
+
+        dataset = DeformableCOCODataset(
+            img_folder=img_folder,
+            ann_file=ann_file,
+            transforms=transforms,
+            return_masks=False,
+            image_id_offset=0,
+            dataset_name=dataset_config.get('name'),
+        )
 
     subset_size = train_config.get('subset_size')
     overfit_mode = train_config.get('overfit', False)
