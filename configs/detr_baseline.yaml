@@ -44,7 +44,7 @@ training:
   batch_size: 4
   num_workers: 4
   max_epochs: 50
-  max_iters: null  # 如果设置则优先使用iter
+  max_iters: null  # 每个epoch最多迭代数（用于快速验证/冒烟）
   
   # 优化器
   optimizer:

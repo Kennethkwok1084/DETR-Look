@@ -246,6 +246,64 @@ def maybe_compile_model(model, config, logger):
         return model
 
 
+def update_dataset_resolution(dataloader, new_size, config, logger):
+    """
+    更新数据集的分辨率以支持渐进式缩放。
+    注意：对于 DETR (HF)，可能需要重新构建 ImageProcessor。
+    对于 Deformable DETR，需要更新 transforms。
+    """
+    model_type = config.get('model', {}).get('type', 'detr').lower()
+    
+    if model_type in ('deformable_detr', 'deformable-detr'):
+        from dataset.deformable_dataset import make_deformable_transforms
+        
+        # 创建新的临时配置以生成新的 transforms
+        temp_config = dict(config)
+        if 'dataset' not in temp_config:
+            temp_config['dataset'] = {}
+        if 'augmentation' not in temp_config['dataset']:
+            temp_config['dataset']['augmentation'] = {}
+            
+        # 设置新的目标尺寸 (单一边长)
+        temp_config['dataset']['augmentation']['train_max_size'] = new_size
+        temp_config['dataset']['augmentation']['train_scales'] = [new_size]
+        
+        new_transforms = make_deformable_transforms('train', temp_config)
+        
+        # 更新底层数据集的 transforms
+        dataset = dataloader.dataset
+        
+        # 处理 Subset/ConcatDataset 的嵌套
+        def _update_ds_transforms(ds):
+            if hasattr(ds, 'datasets'):
+                for sub_ds in ds.datasets:
+                    _update_ds_transforms(sub_ds)
+            elif hasattr(ds, 'dataset'):
+                _update_ds_transforms(ds.dataset)
+            elif hasattr(ds, '_transforms'):
+                ds._transforms = new_transforms
+                
+        _update_ds_transforms(dataset)
+        logger.info(f"🔄 [渐进式缩放] 已更新数据增强最大分辨率为: {new_size}")
+        
+    else:
+        # DETR HF 处理
+        from dataset.coco_dataset import make_collate_fn_with_processor
+        from models import build_image_processor
+        
+        # 修改 processor 配置
+        temp_config = dict(config)
+        if 'dataset' not in temp_config:
+            temp_config['dataset'] = {}
+        if 'augmentation' not in temp_config['dataset']:
+            temp_config['dataset']['augmentation'] = {}
+            
+        # HF Processor 通常接受 size 字典
+        # 简单起见，如果配置了 augmentation，我们可能需要特殊处理
+        # 否则依赖 HF 默认逻辑，这里只给出日志提示
+        logger.warning(f"🔄 [渐进式缩放] DETR (HF) 的渐进式缩放暂未完全支持动态尺寸修改，仅做演示记录：期望尺寸 {new_size}")
+        pass
+
 def main(args):
     """主训练流程"""
     config = load_config(args.config)
@@ -327,6 +385,7 @@ def main(args):
     eval_interval = config['training'].get('eval_interval', 1)
     max_iters = config['training'].get('max_iters')
     score_threshold = config.get('testing', {}).get('confidence_threshold', 0.05)
+    save_best_only = bool(config.get('output', {}).get('save_best_only', False))
 
     if start_epoch > num_epochs:
         logger.warning(f"恢复后的起始 epoch={start_epoch} 已超过 max_epochs={num_epochs}，训练结束")
@@ -337,10 +396,29 @@ def main(args):
     logger.info(f"梯度裁剪: {config['training'].get('clip_max_norm', 0.1)}")
 
     last_metrics = {}
+    
+    # 提取 progressive resizing schedule
+    resize_schedule = config['training'].get('resize_schedule', None)
+    
     for epoch in range(start_epoch, num_epochs + 1):
         logger.info(f"\n{'=' * 60}")
         logger.info(f"Epoch {epoch}/{num_epochs}")
         logger.info(f"{'=' * 60}")
+        
+        # 检查是否需要更新分辨率
+        if resize_schedule:
+            # schedule 格式例如: [[1, 640], [20, 800], [40, 960]]
+            # 找到当前 epoch 对应的目标尺寸
+            target_size = None
+            for sched_epoch, size in sorted(resize_schedule, key=lambda x: x[0]):
+                if epoch >= sched_epoch:
+                    target_size = size
+            
+            # 如果这是一个新的分辨率变更点
+            if target_size and any(epoch == sched_epoch for sched_epoch, _ in resize_schedule):
+                logger.info(f"📈 触发 Progressive Resizing, 调整输入尺寸为: {target_size}")
+                update_dataset_resolution(train_loader, target_size, config, logger)
+                
         epoch_start = time.time()
 
         avg_loss = train_one_epoch(
@@ -388,7 +466,7 @@ def main(args):
         metrics_logger.log(metrics, step=epoch, epoch=epoch)
         last_metrics = metrics
 
-        if epoch % save_interval == 0:
+        if (not save_best_only) and epoch % save_interval == 0:
             checkpoint_model = model._orig_mod if hasattr(model, '_orig_mod') else model
             save_checkpoint(
                 model=checkpoint_model,
@@ -445,20 +523,21 @@ def main(args):
 
         logger.info(f"Epoch {epoch} 耗时: {epoch_time:.1f}s")
 
-    checkpoint_model = model._orig_mod if hasattr(model, '_orig_mod') else model
-    save_checkpoint(
-        model=checkpoint_model,
-        optimizer=optimizer,
-        epoch=num_epochs,
-        step=num_epochs * len(train_loader),
-        metrics=last_metrics,
-        output_dir=output_dir,
-        filename='last.pth',
-        scheduler=scheduler,
-        scaler=scaler,
-        best_metric=best_metric,
-        best_loss=best_loss if best_loss < float('inf') else None,
-    )
+    if not save_best_only:
+        checkpoint_model = model._orig_mod if hasattr(model, '_orig_mod') else model
+        save_checkpoint(
+            model=checkpoint_model,
+            optimizer=optimizer,
+            epoch=num_epochs,
+            step=num_epochs * len(train_loader),
+            metrics=last_metrics,
+            output_dir=output_dir,
+            filename='last.pth',
+            scheduler=scheduler,
+            scaler=scaler,
+            best_metric=best_metric,
+            best_loss=best_loss if best_loss < float('inf') else None,
+        )
 
     logger.info("🎉 训练完成")
     logger.info(f"模型保存在: {output_dir}")

@@ -87,9 +87,20 @@ def train_one_epoch_detr(model, dataloader, optimizer, device, epoch, logger,
         if use_amp:
             with autocast('cuda', dtype=amp_dtype):
                 outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
-                raw_loss = outputs.loss
         else:
             outputs = model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=labels)
+
+        loss_dict = getattr(outputs, 'loss_dict', None)
+        if isinstance(loss_dict, dict) and all(k in loss_dict for k in ('loss_ce', 'loss_bbox', 'loss_giou')):
+            class_coef = float(getattr(model, 'class_loss_coef', 1.0))
+            bbox_coef = float(getattr(model, 'bbox_loss_coef', 5.0))
+            giou_coef = float(getattr(model, 'giou_loss_coef', 2.0))
+            raw_loss = (
+                loss_dict['loss_ce'] * class_coef +
+                loss_dict['loss_bbox'] * bbox_coef +
+                loss_dict['loss_giou'] * giou_coef
+            )
+        else:
             raw_loss = outputs.loss
         
         loss = raw_loss / grad_accum if grad_accum > 1 else raw_loss
